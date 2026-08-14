@@ -1,0 +1,2159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#ffffff" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Shape Hunt</title>
+<style>
+  :root{
+    --bg:#ffffff;
+    --size:22;
+
+    --panel:#131A1B;
+    --panel-raised:#1B2426;
+    --hairline:#2C3A3B;
+    --panel-ink:#E6EDEA;
+    --panel-muted:#8DA09B;
+    --brass:#C9A227;
+    --brass-soft:rgba(201,162,39,.16);
+    --warn:#E4784A;
+    --good:#5FBF7F;
+
+    --chrome-ink:#ffffff;
+    --chrome-fill:rgba(0,0,0,.42);
+    --chrome-edge:rgba(255,255,255,.22);
+  }
+
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+
+  html,body{
+    margin:0; width:100%; height:100%;
+    overflow:hidden; background:var(--bg);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    touch-action:none; overscroll-behavior:none;
+    -webkit-user-select:none; user-select:none;
+    -webkit-touch-callout:none;
+  }
+
+  /* ---------- play surface ---------- */
+  #play{position:fixed; inset:0; background:var(--bg);}
+  #field{position:absolute; inset:0;}
+
+  .thing{
+    position:absolute; display:block;
+    touch-action:none; will-change:transform;
+  }
+  .thing svg{width:100%; height:100%; display:block; fill:currentColor;}
+  .hole{opacity:.55;}
+  /* As a fusion cue the hole is the weaker eye's whole contribution, so it
+     runs at full ink like the Blocks cue rather than as dim context. */
+  .hole.cue{opacity:1;}
+  .hole.cue svg *{stroke-width:6;}
+
+  /* Holes and the jigsaw board read as outlines, not solids. Filling each
+     primitive with the field colour hides the internal seams where a shape
+     is built from overlapping pieces (the flower, the car), so a stroked
+     multi-part shape still reads as one outline. */
+  .hole svg *, .cell svg *{
+    fill:var(--bg); stroke:currentColor; stroke-width:4;
+    stroke-linejoin:round; vector-effect:non-scaling-stroke;
+  }
+  .piece{cursor:grab;}
+  /* Held pieces move by transform only — never left/top, and never under a
+     filter. See the drag note in the script. The lift is the scale in the
+     transform itself, so nothing paints outside the border box. */
+  .piece.held{cursor:grabbing; z-index:3; will-change:transform;}
+  .pop{animation:pop .34s ease forwards; pointer-events:none;}
+  .shake{animation:shake .3s ease;}
+
+  /* jigsaw: a tile is a window onto the whole picture, offset so only its
+     own cell shows through */
+  .tile{position:absolute; overflow:hidden; border-radius:7px; touch-action:none;}
+  .tile-in{position:absolute;}
+  .tile-in svg{display:block; fill:currentColor;}
+  .cell{opacity:.5; pointer-events:none; transition:opacity .18s ease;}
+  /* Both piece kinds, not just .tile — a placed block that stays draggable
+     can be lifted back out of a hole it can no longer re-enter. */
+  .locked{pointer-events:none;}
+
+  /* block mode: a tetromino is a box of square cells. The inset ring is the
+     field colour, so it separates the blocks without adding any ink. */
+  .tetro{position:absolute; touch-action:none;}
+  .tetro i{
+    position:absolute; display:block; background:currentColor;
+    border-radius:15%; box-shadow:inset 0 0 0 2px var(--bg);
+  }
+  .wall{opacity:.32; pointer-events:none;}
+  /* One hole is outlined as a single region, not as loose cells: borders on
+     the shared edges inside a region are suppressed, so a T-shaped gap
+     actually looks like a T. Without this a three year old has to work out
+     which cells group together before he can even start matching. */
+  /* Full ink, never dimmed. A filled block carries far more ink than a thin
+     stroke, so a faint outline loses to it badly — and in fusion mode this
+     outline is the signal the weaker eye has to supply, so attenuating it
+     works against the eye being trained. The wall is dimmed instead; it is
+     only context and a fusion lock. The assist shows itself by weight, not
+     brightness, for the same reason. */
+  .gapgroup{position:absolute; inset:0; pointer-events:none;
+            transition:opacity .18s ease;}
+  .gapgroup i{position:absolute; display:block;
+              border:var(--cue-w,4px) solid currentColor;}
+  .gapgroup.lit i{border-width:var(--cue-lit,9px);}
+  .gapgroup.done{opacity:0;}
+
+  /* Fusion lock: a border both eyes see, so motor fusion has something to
+     hold while the task itself is split across the two eyes. */
+  .frame{
+    position:absolute; pointer-events:none;
+    border:4px solid currentColor; border-radius:12px; opacity:.5;
+  }
+
+  .thumb{
+    width:52px; height:52px; padding:0; border-radius:10px; overflow:hidden;
+    border:1px solid var(--hairline); background:var(--panel-raised); cursor:pointer;
+  }
+  .thumb.on{box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--brass);}
+  .thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+  #picFile{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;}
+  label.chip{display:inline-flex; align-items:center;}
+  @keyframes pop{
+    0%{transform:scale(1); opacity:1;}
+    40%{transform:scale(1.22); opacity:1;}
+    100%{transform:scale(.55); opacity:0;}
+  }
+  @keyframes shake{
+    0%,100%{transform:translateX(0);}
+    25%{transform:translateX(-7px);} 75%{transform:translateX(7px);}
+  }
+
+  /* ---------- heads-up chrome ---------- */
+  #hud{
+    position:fixed; z-index:5;
+    top:calc(10px + env(safe-area-inset-top));
+    left:calc(12px + env(safe-area-inset-left));
+    right:calc(12px + env(safe-area-inset-right));
+    display:flex; align-items:center; justify-content:space-between;
+    gap:10px; pointer-events:none;
+  }
+  #tally{
+    display:flex; align-items:center; gap:10px;
+    color:var(--chrome-ink);
+    background:var(--chrome-fill);
+    border:1px solid var(--chrome-edge);
+    border-radius:999px; padding:7px 14px;
+    backdrop-filter:blur(12px);
+  }
+  #pips{display:flex; gap:5px;}
+  #pips i{
+    width:10px; height:10px; border-radius:999px; display:block;
+    border:1px solid var(--chrome-ink); opacity:.4;
+  }
+  #pips i.lit{background:var(--chrome-ink); opacity:1;}
+  #hitCount{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:14px; font-weight:600; letter-spacing:.04em;
+  }
+  #eyeTag{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:10px; letter-spacing:.18em; opacity:.7;
+  }
+  #eyeTag.hide{display:none;}
+
+  #prompt{
+    display:flex; align-items:center; gap:9px;
+    color:var(--chrome-ink);
+    background:var(--chrome-fill);
+    border:1px solid var(--chrome-edge);
+    border-radius:999px; padding:6px 15px 6px 9px;
+    backdrop-filter:blur(12px);
+  }
+  #prompt.hide{display:none;}
+  #promptArt{width:30px; height:30px; display:block; flex:0 0 auto;}
+  #promptArt svg{width:100%; height:100%; display:block; fill:currentColor;}
+  #promptText{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:10px; letter-spacing:.2em; text-transform:uppercase; opacity:.75;
+  }
+
+  #gear{
+    pointer-events:auto;
+    min-width:46px; min-height:46px;
+    display:grid; place-items:center;
+    border:1px solid var(--chrome-edge);
+    background:var(--chrome-fill);
+    color:var(--chrome-ink);
+    border-radius:999px; font-size:17px;
+    backdrop-filter:blur(12px); cursor:pointer;
+    position:relative; overflow:hidden;
+  }
+  #gear::after{
+    content:""; position:absolute; inset:0;
+    background:var(--chrome-ink); opacity:.28;
+    transform:scaleX(0); transform-origin:left;
+  }
+  #gear.arming::after{transform:scaleX(1); transition:transform .6s linear;}
+
+  #burst{position:fixed; inset:0; z-index:7; pointer-events:none; overflow:hidden;}
+  #burst span{
+    position:absolute; display:block;
+    width:var(--d); height:var(--d);
+    margin-left:calc(var(--d) / -2); margin-top:calc(var(--d) / -2);
+    animation:fly .95s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  #burst svg{width:100%; height:100%; display:block; fill:currentColor;}
+  @keyframes fly{
+    from{transform:translate(0,0) scale(.35) rotate(0deg); opacity:1;}
+    to{transform:translate(var(--tx),var(--ty)) scale(1.15) rotate(var(--rot)); opacity:0;}
+  }
+
+  /* ---------- settings sheet ---------- */
+  #scrim{
+    position:fixed; inset:0; z-index:9;
+    background:rgba(0,0,0,.55);
+    opacity:0; pointer-events:none; transition:opacity .2s ease;
+  }
+  #scrim.on{opacity:1; pointer-events:auto;}
+
+  #panel{
+    position:fixed; z-index:10; inset:auto 0 0 0;
+    background:var(--panel); color:var(--panel-ink);
+    border-top:1px solid var(--brass);
+    border-radius:20px 20px 0 0;
+    padding:0 18px calc(18px + env(safe-area-inset-bottom));
+    max-height:88vh; overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    transform:translateY(102%);
+    transition:transform .26s cubic-bezier(.32,.72,0,1);
+    box-shadow:0 -20px 50px rgba(0,0,0,.5);
+    touch-action:pan-y;
+  }
+  #panel.on{transform:translateY(0);}
+
+  .grip{width:42px; height:4px; border-radius:999px; background:#3C4A4B; margin:12px auto 16px;}
+
+  .masthead{
+    display:flex; align-items:center; gap:14px;
+    padding-bottom:16px; border-bottom:1px solid var(--hairline);
+  }
+  #preview{
+    flex:0 0 auto; width:72px; height:62px;
+    border-radius:12px; border:1px solid var(--hairline);
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    overflow:hidden; padding:8px;
+  }
+  #preview span{display:block; width:26px; height:26px;}
+  #preview svg{width:100%; height:100%; display:block; fill:currentColor;}
+  .masthead h1{margin:0; font-size:17px; font-weight:640; letter-spacing:-.01em;}
+  .masthead p{margin:5px 0 0; font-size:12.5px; color:var(--panel-muted); line-height:1.4;}
+
+  .row{
+    display:grid; grid-template-columns:minmax(0,1fr) auto;
+    gap:14px; align-items:center;
+    padding:15px 0; border-bottom:1px solid var(--hairline);
+  }
+  .row.stack{grid-template-columns:1fr; gap:11px;}
+  .row:last-of-type{border-bottom:0;}
+  .row.off{opacity:.42;}
+  .row.hide{display:none;}
+
+  .eyebrow{
+    display:block;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:9.5px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--brass); margin-bottom:5px;
+  }
+  .label{font-size:15px; font-weight:600; letter-spacing:-.005em;}
+  .sub{display:block; margin-top:4px; font-size:12px; font-weight:400; color:var(--panel-muted); line-height:1.4;}
+  .sub.warn{color:var(--warn);}
+
+  .chips{display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end;}
+  .row.stack .chips{justify-content:flex-start;}
+  .chip{
+    border:1px solid var(--hairline); background:var(--panel-raised);
+    color:var(--panel-ink); border-radius:10px;
+    min-height:40px; padding:0 13px; font-size:13.5px; font-weight:520;
+    cursor:pointer; transition:border-color .15s ease, background .15s ease;
+  }
+  .chip.on{background:var(--brass-soft); border-color:var(--brass); color:#F3E4B4;}
+
+  input[type="range"]{width:100%; accent-color:var(--brass);}
+  input[type="color"].panel-color{
+    width:40px; height:40px; padding:0; border-radius:999px;
+    border:1px solid var(--hairline); background:var(--panel-raised); cursor:pointer;
+  }
+  input[type="color"].panel-color::-webkit-color-swatch-wrapper{padding:3px;}
+  input[type="color"].panel-color::-webkit-color-swatch{border:0; border-radius:999px;}
+
+  .toggle{
+    position:relative; width:52px; height:31px; flex:0 0 auto;
+    border-radius:999px; border:1px solid var(--hairline);
+    background:var(--panel-raised); cursor:pointer; padding:0;
+    transition:background .16s ease, border-color .16s ease;
+  }
+  .toggle::after{
+    content:""; position:absolute; top:3px; left:3px;
+    width:23px; height:23px; border-radius:999px; background:#7D8F8B;
+    transition:transform .16s ease, background .16s ease;
+  }
+  .toggle.on{background:var(--brass-soft); border-color:var(--brass);}
+  .toggle.on::after{transform:translateX(21px); background:var(--brass);}
+
+  #leak{
+    display:flex; align-items:center; gap:9px; margin-top:4px;
+    padding:10px 12px; border-radius:11px;
+    background:var(--panel-raised); border:1px solid var(--hairline);
+    font-size:12.5px; line-height:1.4; color:var(--panel-muted);
+  }
+  #leak i{width:9px; height:9px; border-radius:999px; flex:0 0 auto;}
+  #leak b{color:var(--panel-ink); font-weight:650;}
+
+  .stats{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:11.5px; line-height:1.7; color:var(--panel-muted);
+    background:var(--panel-raised); border:1px solid var(--hairline);
+    border-radius:11px; padding:11px 13px; white-space:pre-wrap;
+  }
+
+  #done{
+    width:100%; margin:18px 0 4px; min-height:52px;
+    border:0; border-radius:13px;
+    background:var(--brass); color:#1A1500;
+    font-size:15.5px; font-weight:700; cursor:pointer;
+  }
+
+  button:focus-visible, input:focus-visible{outline:2px solid var(--brass); outline-offset:2px;}
+
+  @media (min-width:720px){
+    #panel{left:50%; width:min(640px,94vw); transform:translate(-50%,102%);}
+    #panel.on{transform:translate(-50%,0);}
+  }
+  @media (prefers-reduced-motion:reduce){
+    #panel,#scrim{transition:none;}
+    .thing.pop,.thing.shake,#burst span{animation:none;}
+  }
+</style>
+</head>
+<body>
+
+<main id="play" aria-label="Shape hunt play area">
+  <div id="field"></div>
+</main>
+
+<div id="hud">
+  <div id="tally">
+    <div id="pips"><i></i><i></i><i></i><i></i><i></i></div>
+    <span id="hitCount">0</span>
+    <span id="eyeTag" class="hide">L</span>
+  </div>
+  <div id="prompt" class="hide">
+    <span id="promptArt"></span>
+    <span id="promptText">Find this one</span>
+  </div>
+  <button id="gear" aria-label="Hold to open settings">&#9881;</button>
+</div>
+
+<div id="burst" aria-hidden="true"></div>
+<div id="scrim"></div>
+
+<section id="panel" aria-label="Settings" aria-hidden="true">
+  <div class="grip"></div>
+
+  <div class="masthead">
+    <div id="preview"></div>
+    <div>
+      <h1>Shape hunt</h1>
+      <p>Every piece he picks up is inked for one eye only. The gear brings you back here.</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Game</span>
+      <div class="label">What he does<span class="sub" id="modeNote">Build the picture, one piece at a time.</span></div>
+    </div>
+    <div class="chips" id="modeChips">
+      <button class="chip on" data-mode="jigsaw">Jigsaw</button>
+      <button class="chip" data-mode="blocks">Blocks</button>
+      <button class="chip" data-mode="sort">Shape sorter</button>
+      <button class="chip" data-mode="tap">Touch it</button>
+    </div>
+  </div>
+
+  <div class="row" id="pieceRow">
+    <div>
+      <div class="label">How many pieces<span class="sub">Pieces alternate between his eyes, so he swaps eyes as he works through one puzzle.</span></div>
+    </div>
+    <div class="chips" id="pieceChips">
+      <button class="chip" data-n="2">2</button>
+      <button class="chip on" data-n="4">4</button>
+      <button class="chip" data-n="6">6</button>
+      <button class="chip" data-n="9">9</button>
+    </div>
+  </div>
+
+  <div class="row hide" id="tapRow">
+    <div>
+      <div class="label">Shapes on screen<span class="sub">More than one means he has to match the shape in the corner.</span></div>
+    </div>
+    <div class="chips" id="tapChips">
+      <button class="chip on" data-n="1">1</button>
+      <button class="chip" data-n="2">2</button>
+      <button class="chip" data-n="3">3</button>
+    </div>
+  </div>
+
+  <div class="row hide" id="sortRow">
+    <div>
+      <div class="label">Holes to choose from<span class="sub">The holes are dim and both eyes see them. The piece is for one eye.</span></div>
+    </div>
+    <div class="chips" id="holeChips">
+      <button class="chip" data-n="1">1</button>
+      <button class="chip on" data-n="2">2</button>
+      <button class="chip" data-n="3">3</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="label">Shape set</div>
+    </div>
+    <div class="chips" id="shapeChips">
+      <button class="chip on" data-set="simple">Simple</button>
+      <button class="chip" data-set="all">Everything</button>
+    </div>
+  </div>
+
+  <div class="row stack" id="picRow">
+    <div>
+      <span class="eyebrow">Picture</span>
+      <div class="label">What the puzzle shows<span class="sub" id="picNote">Built-in shapes.</span></div>
+    </div>
+    <div class="chips" id="picChips">
+      <button class="chip on" data-pic="shapes">Shapes</button>
+      <button class="chip" data-pic="photo">Photo</button>
+    </div>
+    <div class="chips" id="picGallery"></div>
+    <div class="chips">
+      <label class="chip" for="picFile">Add a picture</label>
+      <input id="picFile" type="file" accept="image/*" />
+      <button id="picRemove" class="chip">Remove this one</button>
+    </div>
+    <div class="chips" id="toneChips">
+      <button class="chip" data-tones="2">2 tone</button>
+      <button class="chip on" data-tones="3">3</button>
+      <button class="chip" data-tones="4">4</button>
+      <button class="chip" data-tones="0">Full grey</button>
+    </div>
+    <label class="sub" for="biasRange">Ink balance <b id="biasVal">0</b><span class="sub">Slide until the picture reads clearly. More ink to the right.</span></label>
+    <input id="biasRange" type="range" min="-40" max="40" value="0" aria-label="Ink balance" />
+  </div>
+
+  <div class="row stack" id="sizeRow">
+    <div>
+      <span class="eyebrow">Acuity</span>
+      <div class="label">Shape size<span class="sub" id="sizeNote">22% of the short side</span></div>
+    </div>
+    <input id="sizeRange" type="range" min="8" max="45" step="1" value="22" aria-label="Shape size" />
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Field</span>
+      <div class="label">Background<span class="sub">On white the inks swap over. Both work.</span></div>
+    </div>
+    <div class="chips" id="bgChips">
+      <button class="chip" data-bg="#000000">Black</button>
+      <button class="chip on" data-bg="#ffffff">White</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Eyes</span>
+      <div class="label">Which eye works<span class="sub" id="eyeNote">Strict left, right, left, right.</span></div>
+    </div>
+    <div class="chips" id="eyeChips">
+      <button class="chip on" data-eye="alt">Alternate</button>
+      <button class="chip" data-eye="L">Left only</button>
+      <button class="chip" data-eye="R">Right only</button>
+      <button class="chip" data-eye="both">Both</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="label">Which eye wears the red lens</div>
+    </div>
+    <div class="chips" id="lensChips">
+      <button class="chip on" data-red="L">Red left</button>
+      <button class="chip" data-red="R">Red right</button>
+    </div>
+  </div>
+
+  <div class="row" id="mixRow">
+    <div class="label">Mix eyes in one round<span class="sub">Decoy shapes go to the other eye, so both eyes have to stay switched on.</span></div>
+    <button id="mixEyes" class="toggle" role="switch" aria-checked="false" aria-label="Mix eyes in one round"></button>
+  </div>
+
+  <div class="row" id="fusionRow">
+    <div>
+      <span class="eyebrow">Both eyes</span>
+      <div class="label">Both eyes needed<span class="sub" id="fusionNote">Each piece goes to one eye and the hole it belongs in goes to the <em>other</em> eye, with the frame visible to both. He cannot place anything unless both eyes are working at once. If he stalls badly, turn this back off.</span></div>
+    </div>
+    <button id="fusion" class="toggle" role="switch" aria-checked="false" aria-label="Both eyes needed"></button>
+  </div>
+
+  <div class="row" id="assistRow">
+    <div class="label">Show where it goes<span class="sub">In Blocks, picking a piece up lights the holes it fits. Turn off once he does it without help.</span></div>
+    <button id="assist" class="toggle on" role="switch" aria-checked="true" aria-label="Show where it goes"></button>
+  </div>
+
+  <div class="row">
+    <div class="label">Show the eye tag<span class="sub">A small L or R up top so you can check by covering an eye.</span></div>
+    <button id="showTag" class="toggle" role="switch" aria-checked="false" aria-label="Show the eye tag"></button>
+  </div>
+
+  <div class="row">
+    <div class="label">Childproof the gear<span class="sub">Off, one tap opens this sheet. On, it takes three quick taps. Loading the page with <b>#settings</b> on the end always works.</span></div>
+    <button id="childLock" class="toggle" role="switch" aria-checked="false" aria-label="Childproof the gear"></button>
+  </div>
+
+  <div class="row stack">
+    <div>
+      <span class="eyebrow">Ink</span>
+      <div class="label">The glasses<span class="sub" id="inkNote">Standard red and green.</span></div>
+    </div>
+    <div class="chips" id="pairChips">
+      <button class="chip" data-pair="cyan">Red / Cyan</button>
+      <button class="chip on" data-pair="green">Red / Green</button>
+      <button class="chip" data-pair="blue">Red / Blue</button>
+    </div>
+    <label class="sub" for="blueRange">Blue let through by the second lens <b id="blueVal">0%</b></label>
+    <input id="blueRange" type="range" min="0" max="100" value="0" aria-label="Blue let through by the second lens" />
+    <label class="sub" for="redRange">Blue let through by the <em>red</em> lens <b id="redVal">0%</b><span class="sub">Raise this if the red-lens eye can still make out its own ink. It pushes that ink towards magenta, which is usually what a real red filter needs.</span></label>
+    <input id="redRange" type="range" min="0" max="100" value="0" aria-label="Blue let through by the red lens" />
+    <div class="chips">
+      <input id="inkRed" class="panel-color" type="color" value="#ff0000" aria-label="Red ink" />
+      <button id="fixRed" class="chip">Clean up</button>
+      <input id="inkGreen" class="panel-color" type="color" value="#00ff00" aria-label="Second ink" />
+      <button id="fixGreen" class="chip">Clean up</button>
+      <button id="inkStandard" class="chip">Reset</button>
+    </div>
+    <div id="leak"><i></i><span></span></div>
+    <div id="leakRed" class="stats"></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Sound</div>
+    <button id="sound" class="toggle on" role="switch" aria-checked="true" aria-label="Sound"></button>
+  </div>
+
+  <div class="row">
+    <div class="label">Full screen</div>
+    <div class="chips"><button id="fullBtn" class="chip">Toggle</button></div>
+  </div>
+
+  <div class="row stack">
+    <div>
+      <span class="eyebrow">Session</span>
+      <div class="label">How it is going</div>
+    </div>
+    <div class="stats" id="statLine">No taps yet today.</div>
+    <div class="chips"><button id="statReset" class="chip">Clear today</button></div>
+  </div>
+
+  <button id="done">Back to playing</button>
+</section>
+
+<script>
+(function(){
+  "use strict";
+
+  const root = document.documentElement;
+  const $ = id => document.getElementById(id);
+
+  /* Persistence. Wrapped, and the only place browser storage is touched:
+     a blocked or full store must degrade to defaults, never throw. */
+  const store = {
+    get(key, dflt){
+      try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : dflt; }
+      catch(_){ return dflt; }
+    },
+    set(key, value){
+      try{ localStorage.setItem(key, JSON.stringify(value)); }catch(_){}
+    }
+  };
+  const CALIB_KEY = 'anaglyph.calib.v1';
+  const GAME_KEY  = 'anaglyph.puzzle.v1';
+  const LOG_KEY   = 'anaglyph.log.v1';
+
+  /* Which light each lens lets through. A cyan lens passes green AND blue,
+     which is why a cyan-tuned ink behaves differently from a green one. */
+  const LENS = {
+    cyan: { name:'cyan',  hue:180, g:1, b:1 },
+    green:{ name:'green', hue:120, g:1, b:0 },
+    blue: { name:'blue',  hue:225, g:0, b:1 }
+  };
+
+  const state = Object.assign({
+    mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple',
+    picture:'shapes', tones:3, picBias:0, picIdx:0,
+    size:22, bg:'#ffffff',
+    eyePlan:'alt', mix:false, showTag:false, sound:true, childLock:false, assist:true,
+    fusion:false,
+    red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0, redBlue:0, redSide:'L',
+    hits:0, misses:0, round:0, curEye:'L', goal:null, t0:0
+  }, store.get(CALIB_KEY, {}), store.get(GAME_KEY, {}));
+  state.hits = 0; state.misses = 0; state.round = 0;
+
+  let calibBg = state.bg;
+
+  /* ---------- anaglyph optics ----------
+     Black field: a letter is seen only through the lens of its own color.
+     White field: the letter goes dark under the OPPOSITE lens, so the
+     colors swap. This works that out so an L/R plan holds on either
+     background. */
+  function inkFor(eye, bgOverride){
+    const onWhite = (bgOverride || state.bg).toLowerCase() === '#ffffff';
+    if (eye === 'both') return onWhite ? '#000000' : '#ffffff';
+    const lensIsRed = (eye === state.redSide);
+    if (onWhite) return lensIsRed ? state.green : state.red;
+    return lensIsRed ? state.red : state.green;
+  }
+
+  /* Real lenses sit between the labels: a 'green' lens usually passes some
+     blue too, which is why a pure green ink can still ghost. The red filter
+     leaks as well, and it leaks blue — that is the whole reason a magenta
+     ink beats a pure red one. Holding B at the field value is what kills
+     the ghost the red-lens eye would otherwise see. */
+  function weights(lensKey){
+    if (lensKey === 'red') return [1, 0, state.redBlue || 0];
+    return [0, LENS[state.pair].g, state.pair === 'blue' ? 1 : state.bluePass];
+  }
+
+  function rgbOf(hex){
+    const n = parseInt(hex.slice(1), 16);
+    return { r:(n >> 16) & 255, g:(n >> 8) & 255, b:n & 255 };
+  }
+
+  /* How much of this ink survives a given lens, 0 to 255. */
+  function through(lensKey, hex){
+    const c = rgbOf(hex), w = weights(lensKey);
+    const sum = w[0] + w[1] + w[2];
+    return sum ? (c.r * w[0] + c.g * w[1] + c.b * w[2]) / sum : 0;
+  }
+
+  /* What an eye actually notices is contrast against the field, not
+     brightness. On black a letter shows by being bright; on white it shows
+     by being dark. One formula covers both. */
+  function visible(lensKey, hex){
+    return Math.abs(through(lensKey, hex) - through(lensKey, calibBg)) / 255;
+  }
+
+  /* On a white field inkFor hands each ink to the *opposite* eye, so the
+     lens that is meant to see it swaps too. Without this inversion the
+     meter grades a correctly tuned white-field ink as 100% ghosting and
+     too faint — which makes calibrating on white impossible. */
+  function reading(key){
+    const hex = state[key === 'red' ? 'red' : 'green'];
+    const onWhite = (calibBg || '#000000').toLowerCase() === '#ffffff';
+    const redIsOwn = (key === 'red') !== onWhite;
+    const ownLens   = redIsOwn ? 'red' : state.pair;
+    const wrongLens = redIsOwn ? state.pair : 'red';
+    const own = visible(ownLens, hex), wrong = visible(wrongLens, hex);
+    return { own:own, wrong:wrong, ghost: own ? Math.min(1, wrong / own) : 1 };
+  }
+
+  /* The ink that vanishes through the lens which must not see it: hold every
+     channel that lens passes at the field value, and drive the rest to full
+     contrast for the eye that should see it. On a white field with a leaky
+     red filter this lands on magenta. */
+  function bestInk(key){
+    const onWhite = (state.bg || '#000000').toLowerCase() === '#ffffff';
+    const f = onWhite ? 255 : 0, o = onWhite ? 0 : 255;
+    const hx = v => v.toString(16).padStart(2, '0');
+    const hideFrom = ((key === 'red') !== onWhite) ? state.pair : 'red';
+    if (hideFrom === 'red'){
+      return '#' + hx(f) + hx(o) + hx((state.redBlue || 0) > 0 ? f : o);
+    }
+    const w = weights(state.pair);
+    return '#' + hx(o) + hx(w[1] ? f : o) + hx(w[2] > 0 ? f : o);
+  }
+
+  /* ---------- tone ramp ----------
+     A shade between the field and this eye's calibrated ink. t=0 is the
+     field itself, invisible to everybody; t=1 is the ink at full strength.
+     The ramp is a straight line in RGB space between two points, so every
+     tone on it carries the same wrong-eye leak ratio as the ink does — a
+     greyscale or posterised picture is therefore exactly as clean as a
+     solid silhouette. Blending two tones (an antialiased edge, a bilinear
+     downscale) lands on the same line, so smoothing is safe too. */
+  function rampEnds(eye){
+    return { a: rgbOf(state.bg || '#000000'), b: rgbOf(inkFor(eye)) };
+  }
+
+  function rampInk(eye, t){
+    const e = rampEnds(eye), k = Math.max(0, Math.min(1, t));
+    const hx = v => Math.round(v).toString(16).padStart(2, '0');
+    return '#' + hx(e.a.r + (e.b.r - e.a.r) * k) +
+                 hx(e.a.g + (e.b.g - e.a.g) * k) +
+                 hx(e.a.b + (e.b.b - e.a.b) * k);
+  }
+
+  /* Best second ink on a black field: full in every channel the lens passes. */
+  function defaultOther(){
+    const w = weights(state.pair);
+    const hx = v => v.toString(16).padStart(2,'0');
+    return '#00' + hx(w[1] ? 255 : 0) + hx(w[2] > 0 ? 255 : 0);
+  }
+
+  /* ---------- the shapes ----------
+     Solid silhouettes only. A three year old reads a filled outline far
+     faster than a line drawing, and a silhouette carries exactly one
+     color, which is what the optics require. */
+  const SHAPES = {
+    circle:   {simple:true,  svg:'<circle cx="50" cy="50" r="45"/>'},
+    square:   {simple:true,  svg:'<rect x="8" y="8" width="84" height="84" rx="12"/>'},
+    triangle: {simple:true,  svg:'<path d="M50 7 93 86H7Z"/>'},
+    star:     {simple:true,  svg:'<path d="M50 5 60.6 35.4 92.8 36.1 67.1 55.6 76.5 86.4 50 68 23.5 86.4 32.9 55.6 7.2 36.1 39.4 35.4Z"/>'},
+    heart:    {simple:true,  svg:'<path d="M50 89C19 67 7 51 7 34A22 22 0 0 1 50 24 22 22 0 0 1 93 34c0 17-12 33-43 55Z"/>'},
+    diamond:  {simple:true,  svg:'<path d="M50 5 92 50 50 95 8 50Z"/>'},
+    hexagon:  {simple:true,  svg:'<path d="M50 6 89 28v44L50 94 11 72V28Z"/>'},
+    cross:    {simple:true,  svg:'<path d="M38 7h24v31h31v24H62v31H38V62H7V38h31Z"/>'},
+    moon:     {simple:false, svg:'<path d="M64 6A45 45 0 1 0 64 94A54 54 0 0 1 64 6Z"/>'},
+    fish:     {simple:false, svg:'<ellipse cx="43" cy="50" rx="35" ry="23"/><path d="M76 50 97 28v44Z"/>'},
+    car:      {simple:false, svg:'<rect x="8" y="52" width="84" height="20" rx="7"/><path d="M25 52 35 30h30l10 22Z"/><circle cx="30" cy="74" r="11"/><circle cx="70" cy="74" r="11"/>'},
+    butterfly:{simple:false, svg:'<ellipse cx="29" cy="33" rx="23" ry="19"/><ellipse cx="71" cy="33" rx="23" ry="19"/><ellipse cx="33" cy="68" rx="19" ry="16"/><ellipse cx="67" cy="68" rx="19" ry="16"/><rect x="46" y="24" width="8" height="54" rx="4"/>'},
+    apple:    {simple:false, svg:'<circle cx="33" cy="58" r="30"/><circle cx="67" cy="58" r="30"/><rect x="46" y="12" width="7" height="26" rx="3.5"/><path d="M53 28c9-11 20-13 27-11-2 9-11 16-27 16Z"/>'},
+    flower:   {simple:false, svg:'<circle cx="50" cy="20" r="17"/><circle cx="76" cy="35" r="17"/><circle cx="76" cy="65" r="17"/><circle cx="50" cy="80" r="17"/><circle cx="24" cy="65" r="17"/><circle cx="24" cy="35" r="17"/><circle cx="50" cy="50" r="16"/>'}
+  };
+  const ALL_SHAPES = Object.keys(SHAPES);
+  function shapePool(){
+    return state.shapeSet === 'simple' ? ALL_SHAPES.filter(k => SHAPES[k].simple) : ALL_SHAPES;
+  }
+  function svgFor(shape){
+    return '<svg viewBox="0 0 100 100" aria-hidden="true">' + SHAPES[shape].svg + '</svg>';
+  }
+
+  /* ---------- sound ----------
+     No files: an iPad in airplane mode has to make the same noises. */
+  let ac = null;
+  function audio(){
+    if (!ac){
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      try{ ac = new Ctx(); }catch(_){ return null; }
+    }
+    if (ac.state === 'suspended') ac.resume().catch(()=>{});
+    return ac;
+  }
+  function tone(freq, delay, dur, peak){
+    if (!state.sound) return;
+    const c = audio(); if (!c) return;
+    const t = c.currentTime + delay;
+    const osc = c.createOscillator(), gain = c.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(peak || 0.22, t + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain); gain.connect(c.destination);
+    osc.start(t); osc.stop(t + dur + 0.02);
+  }
+  const sayYes   = () => [523.25, 659.25, 783.99].forEach((f,i) => tone(f, i*0.07, 0.20));
+  const sayNo    = () => { tone(196, 0, 0.16, .16); tone(155, 0.09, 0.20, .16); };
+  const sayParty = () => [523.25,587.33,659.25,783.99,880,1046.5].forEach((f,i) => tone(f, i*0.08, 0.26));
+
+  /* ---------- layout ---------- */
+  const play = $('play'), field = $('field');
+  const HUD_CLEARANCE = 92;
+
+  function sizePx(){
+    return Math.round(state.size / 100 * Math.min(window.innerWidth, window.innerHeight));
+  }
+
+  function bounds(){
+    const s = sizePx(), pad = 10;
+    const w = field.clientWidth, h = field.clientHeight;
+    const x0 = pad + s/2, x1 = w - pad - s/2;
+    const y0 = HUD_CLEARANCE + s/2, y1 = h - pad - s/2;
+    return {
+      x0: Math.min(x0, w/2), x1: Math.max(x1, w/2),
+      y0: Math.min(y0, h/2), y1: Math.max(y1, h/2)
+    };
+  }
+
+  /* Rejection sampling, then best effort. With three big shapes on a phone
+     there may be no gap wide enough, so take the roomiest try rather than
+     looping forever. */
+  function place(n){
+    const b = bounds(), minSep = sizePx() * 1.12, out = [];
+    for (let i = 0; i < n; i++){
+      let best = null, bestGap = -1;
+      for (let t = 0; t < 300; t++){
+        const p = {
+          x: b.x0 + Math.random() * Math.max(0, b.x1 - b.x0),
+          y: b.y0 + Math.random() * Math.max(0, b.y1 - b.y0)
+        };
+        let gap = Infinity;
+        for (const q of out) gap = Math.min(gap, Math.hypot(p.x - q.x, p.y - q.y));
+        if (gap > minSep){ best = p; break; }
+        if (gap > bestGap){ bestGap = gap; best = p; }
+      }
+      out.push(best);
+    }
+    return out;
+  }
+
+  function shuffled(list){
+    const out = list.slice();
+    for (let i = out.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = out[i]; out[i] = out[j]; out[j] = t;
+    }
+    return out;
+  }
+
+  function makeThing(shape, color, cls, pos){
+    const s = sizePx();
+    const el = document.createElement('div');
+    el.className = 'thing ' + cls;
+    el.dataset.shape = shape;
+    el.style.width = s + 'px';
+    el.style.height = s + 'px';
+    el.style.left = (pos.x - s/2) + 'px';
+    el.style.top  = (pos.y - s/2) + 'px';
+    el.style.color = color;
+    el.innerHTML = svgFor(shape);
+    field.appendChild(el);
+    return el;
+  }
+
+  function centerOf(el){
+    return { x: el.offsetLeft + el.offsetWidth/2, y: el.offsetTop + el.offsetHeight/2 };
+  }
+
+  /* ---------- rounds ---------- */
+  function nextEye(){
+    if (state.eyePlan === 'alt') return state.round % 2 === 0 ? 'L' : 'R';
+    return state.eyePlan;
+  }
+  function otherEye(eye){
+    return eye === 'L' ? 'R' : (eye === 'R' ? 'L' : 'both');
+  }
+
+  function pickShapes(n){
+    const pool = shapePool().slice();
+    const out = [];
+    for (let i = 0; i < n && pool.length; i++){
+      out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    }
+    while (out.length < n) out.push(out[0]);
+    return out;
+  }
+
+  function newRound(){
+    field.innerHTML = '';
+    jigCells = [];
+    state.curEye = nextEye();
+    state.round += 1;
+
+    if (state.mode === 'jigsaw') buildJigsaw();
+    else if (state.mode === 'blocks') buildBlocks();
+    else if (state.mode === 'sort') buildSort();
+    else buildTap();
+
+    state.t0 = performance.now();
+    paintHud();
+  }
+
+  /* ---------- jigsaw ----------
+     A real puzzle rather than a target drill: a picture split into a grid,
+     scattered, and rebuilt. The board underneath is drawn in both-eye ink
+     and dimmed — the same "picture printed under the pieces" that wooden
+     toddler puzzles use — while every piece is inked for one eye. So he
+     localizes something only one eye can see against a reference both eyes
+     share, and because consecutive pieces alternate eyes, he swaps eyes
+     several times inside a single puzzle. */
+  const GRIDS = { 2:[2,1], 4:[2,2], 6:[3,2], 9:[3,3] };
+  let jig = { total:0, placed:0 };
+  let jigCells = [];
+
+  /* Board and tray are the same square, side by side. Sizing the board to
+     its own half only would make cell-sized pieces too big for the tray to
+     hold without stacking, so both halves constrain the side length. */
+  function jigsawLayout(){
+    const pad = 12;
+    const availW = field.clientWidth - pad * 2;
+    const availH = field.clientHeight - HUD_CLEARANCE - pad;
+    const wide = availW > availH;
+    const half = wide ? { w:(availW - pad) / 2, h:availH } : { w:availW, h:(availH - pad) / 2 };
+    const side = Math.max(60, Math.min(half.w, half.h) * 0.94);
+    const offX = (half.w - side) / 2, offY = (half.h - side) / 2;
+    return {
+      side: side,
+      bx: pad + offX,
+      by: HUD_CLEARANCE + offY,
+      tx: wide ? pad + half.w + pad + offX : pad + offX,
+      ty: wide ? HUD_CLEARANCE + offY : HUD_CLEARANCE + half.h + pad + offY
+    };
+  }
+
+  /* A window onto the whole picture, shifted so only one cell shows.
+     `art` is either {shape, color} for a silhouette or {url} for a photo
+     layer; both are drawn at full board size and clipped by the tile. */
+  function tile(art, cls, x, y, w, h, col, row, side){
+    const el = document.createElement('div');
+    el.className = 'tile ' + cls;
+    el.style.width = w + 'px';
+    el.style.height = h + 'px';
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    const inner = document.createElement('div');
+    inner.className = 'tile-in';
+    inner.style.left = (-col * w) + 'px';
+    inner.style.top = (-row * h) + 'px';
+    if (art.url){
+      inner.style.width = side + 'px';
+      inner.style.height = side + 'px';
+      inner.style.backgroundImage = 'url(' + art.url + ')';
+      inner.style.backgroundSize = side + 'px ' + side + 'px';
+    } else {
+      el.style.color = art.color;
+      inner.innerHTML = '<svg viewBox="0 0 100 100" width="' + side + '" height="' + side +
+                        '" aria-hidden="true">' + SHAPES[art.shape].svg + '</svg>';
+    }
+    el.appendChild(inner);
+    field.appendChild(el);
+    return el;
+  }
+
+  /* ---------- photo jigsaw ----------
+     A picture can only be made of tones that sit on this eye's ink ramp,
+     and every tone on that ramp carries the same wrong-eye leak as the ink
+     (see rampEnds). So a posterised or greyscale photograph is exactly as
+     clean, optically, as a solid silhouette — and far more motivating when
+     it is a picture of his own toys. */
+  const PIC_KEY = 'anaglyph.pics.v1';
+  const PIC_SIZE = 512;
+  let pics = store.get(PIC_KEY, []);
+  let picLum = null, picOtsu = 128, picReady = false, picThumb = null;
+  let layerCache = { key:null };
+
+  /* Otsu: the split that best separates the histogram into two clumps.
+     A fixed halfway threshold turns most real photographs into a blob. */
+  function otsu(hist, total){
+    let sum = 0;
+    for (let v = 0; v < 256; v++) sum += v * hist[v];
+    let sumB = 0, wB = 0, best = -1, at = 128;
+    for (let v = 0; v < 256; v++){
+      wB += hist[v];
+      if (!wB) continue;
+      const wF = total - wB;
+      if (!wF) break;
+      sumB += v * hist[v];
+      const mB = sumB / wB, mF = (sum - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > best){ best = between; at = v; }
+    }
+    return at;
+  }
+
+  function analyzePicture(done){
+    picReady = false; picLum = null;
+    const src = pics[state.picIdx];
+    if (!src){ if (done) done(); return; }
+    const img = new Image();
+    img.onerror = () => { if (done) done(); };
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = PIC_SIZE;
+      const g = c.getContext('2d', { willReadFrequently:true });
+      g.drawImage(img, 0, 0, PIC_SIZE, PIC_SIZE);
+      const d = g.getImageData(0, 0, PIC_SIZE, PIC_SIZE).data;
+      const n = PIC_SIZE * PIC_SIZE;
+      const lum = new Uint8ClampedArray(n), hist = new Uint32Array(256);
+      for (let i = 0; i < n; i++){
+        const v = (d[i*4] * 0.2126 + d[i*4+1] * 0.7152 + d[i*4+2] * 0.0722) | 0;
+        lum[i] = v; hist[v]++;
+      }
+      /* Stretch to the full range ignoring the 2% tails. Phone photos are
+         low contrast and posterise to mush without this. */
+      let lo = 0, hi = 255, acc = 0;
+      const cut = n * 0.02;
+      for (let v = 0; v < 256; v++){ acc += hist[v]; if (acc >= cut){ lo = v; break; } }
+      acc = 0;
+      for (let v = 255; v >= 0; v--){ acc += hist[v]; if (acc >= cut){ hi = v; break; } }
+      const span = Math.max(1, hi - lo);
+      const flat = new Uint32Array(256);
+      for (let i = 0; i < n; i++){
+        const v = Math.max(0, Math.min(255, Math.round((lum[i] - lo) * 255 / span)));
+        lum[i] = v; flat[v]++;
+      }
+      picLum = lum;
+      picOtsu = otsu(flat, n);
+      picReady = true;
+      layerCache = { key:null };
+      if (done) done();
+    };
+    img.src = src;
+  }
+
+  /* Luminance to ink strength: the dark parts of the picture become ink. */
+  function toneAt(v){
+    const bias = (state.picBias || 0) / 100;
+    if (state.tones === 2) return v < picOtsu + bias * 255 ? 1 : 0;
+    const x = Math.max(0, Math.min(1, 1 - v / 255 + bias));
+    return state.tones ? Math.round(x * (state.tones - 1)) / (state.tones - 1) : x;
+  }
+
+  function layerFor(eye){
+    const c = document.createElement('canvas');
+    c.width = c.height = PIC_SIZE;
+    const g = c.getContext('2d');
+    const out = g.createImageData(PIC_SIZE, PIC_SIZE), px = out.data;
+    const e = rampEnds(eye), n = PIC_SIZE * PIC_SIZE;
+    for (let i = 0; i < n; i++){
+      const t = toneAt(picLum[i]), j = i * 4;
+      px[j]     = e.a.r + (e.b.r - e.a.r) * t;
+      px[j + 1] = e.a.g + (e.b.g - e.a.g) * t;
+      px[j + 2] = e.a.b + (e.b.b - e.a.b) * t;
+      px[j + 3] = 255;
+    }
+    g.putImageData(out, 0, 0);
+    /* PNG, never JPEG: lossy coding invents colours off the ink ramp, and
+       anything off the ramp is visible to the eye that must not see it. */
+    return c.toDataURL('image/png');
+  }
+
+  function layers(){
+    const key = [state.picIdx, state.tones, state.picBias, state.bg, state.red,
+                 state.green, state.pair, state.bluePass, state.redBlue,
+                 state.redSide].join('|');
+    if (layerCache.key !== key){
+      layerCache = { key:key, L:layerFor('L'), R:layerFor('R'), both:layerFor('both') };
+    }
+    return layerCache;
+  }
+
+  function usePicture(){ return state.picture === 'photo' && picReady && !!picLum; }
+
+  /* ---------- blocks ----------
+     A grid mostly filled in, with tetromino-shaped gaps left in it, and the
+     matching pieces to drop in. The wall and the gap outlines are drawn in
+     both-eye ink; the pieces are monocular and alternate eyes, so he has to
+     judge a shape only one eye can see against a frame both eyes share.
+     The layout is generated by carving the gaps out first, so every board
+     is solvable by construction. */
+  const TETRO = {
+    duo:[[0,0],[1,0]],
+    tri:[[0,0],[1,0],[2,0]],
+    ell:[[0,0],[0,1],[1,1]],
+    O:[[0,0],[1,0],[0,1],[1,1]],
+    I:[[0,0],[1,0],[2,0],[3,0]],
+    T:[[0,0],[1,0],[2,0],[1,1]],
+    S:[[1,0],[2,0],[0,1],[1,1]],
+    Z:[[0,0],[1,0],[1,1],[2,1]],
+    J:[[0,0],[0,1],[1,1],[2,1]],
+    L:[[2,0],[0,1],[1,1],[2,1]]
+  };
+  const SMALL_SET = ['duo', 'tri', 'ell', 'O'];
+  const FULL_SET  = ['O', 'I', 'T', 'S', 'Z', 'J', 'L'];
+  let tet = null;
+
+  /* Canonical form of a cell set, so a piece can be matched against every
+     hole of the same shape — duplicates are legal and interchangeable. */
+  function sigOf(cells){
+    const bb = bboxOf(cells);
+    return cells.map(p => (p[0] - bb.c0) + '.' + (p[1] - bb.r0)).sort().join(' ');
+  }
+
+  /* Absolute grid cells, order independent — identifies one specific hole. */
+  function cellKey(cells){
+    return cells.map(p => p[0] + ',' + p[1]).sort().join(' ');
+  }
+
+  function addFrame(x, y, w, h, color){
+    const f = document.createElement('div');
+    f.className = 'frame';
+    const pad = 10;
+    f.style.left = (x - pad) + 'px'; f.style.top = (y - pad) + 'px';
+    f.style.width = (w + pad*2) + 'px'; f.style.height = (h + pad*2) + 'px';
+    f.style.color = color;
+    field.appendChild(f);
+  }
+
+  function bboxOf(cells){
+    let c0 = Infinity, r0 = Infinity, c1 = -Infinity, r1 = -Infinity;
+    cells.forEach(p => {
+      c0 = Math.min(c0, p[0]); c1 = Math.max(c1, p[0]);
+      r0 = Math.min(r0, p[1]); r1 = Math.max(r1, p[1]);
+    });
+    return { c0:c0, r0:r0, w:c1 - c0 + 1, h:r1 - r0 + 1 };
+  }
+
+  /* `inset` shrinks each block inside its cell, leaving a margin for the cue
+     outline to sit in. Without it the outline paints over the binocular wall
+     block, and the eye that cannot see the cue ink reads that ink as field
+     colour — so the block simply looks smaller. That "shrinking" gives the
+     hole away to the wrong eye and defeats the split. Occluding a binocular
+     element is never neutral. */
+  function blockEl(cells, bb, cs, color, cls, inset){
+    const m = inset || 0;
+    const el = document.createElement('div');
+    el.className = 'tetro ' + cls;
+    el.style.width = bb.w * cs + 'px';
+    el.style.height = bb.h * cs + 'px';
+    el.style.color = color;
+    cells.forEach(p => {
+      const b = document.createElement('i');
+      b.style.left = ((p[0] - bb.c0) * cs + m) + 'px';
+      b.style.top  = ((p[1] - bb.r0) * cs + m) + 'px';
+      b.style.width = (cs - 2 * m) + 'px';
+      b.style.height = (cs - 2 * m) + 'px';
+      /* The inset ring exists to separate touching blocks; a real margin
+         already does that, and the ring would only eat into the block. */
+      if (m) b.style.boxShadow = 'none';
+      el.appendChild(b);
+    });
+    field.appendChild(el);
+    return el;
+  }
+
+  /* One attempt at carving `want` holes out of a dim x dim wall. Random
+     placement frequently cannot fit the last tetromino, so the caller
+     retries and then widens the grid rather than quietly handing back
+     fewer pieces than were asked for. */
+  function carve(dim, want){
+    const pool = state.shapeSet === 'simple' ? SMALL_SET : FULL_SET;
+    for (let attempt = 0; attempt < 40; attempt++){
+      const grid = [];
+      for (let r = 0; r < dim; r++) grid.push(new Array(dim).fill(1));  // 1 = wall
+      const chosen = [];
+      let guard = 0;
+      while (chosen.length < want && guard++ < 300){
+        const cells = TETRO[pool[Math.floor(Math.random() * pool.length)]];
+        const bb = bboxOf(cells);
+        const gx = Math.floor(Math.random() * (dim - bb.w + 1));
+        const gy = Math.floor(Math.random() * (dim - bb.h + 1));
+        const at = cells.map(p => [p[0] - bb.c0 + gx, p[1] - bb.r0 + gy]);
+        if (at.every(p => grid[p[1]][p[0]] === 1)){
+          at.forEach(p => { grid[p[1]][p[0]] = 0; });                   // 0 = gap
+          chosen.push({ cells:cells, bb:bb, at:at });
+        }
+      }
+      if (chosen.length === want) return { grid:grid, chosen:chosen, dim:dim };
+    }
+    return null;
+  }
+
+  function buildBlocks(){
+    const want = Math.max(2, Math.min(9, state.pieces));
+    const base = want <= 2 ? 4 : (want <= 4 ? 5 : (want <= 6 ? 6 : 7));
+    let built = null;
+    for (let d = base; d <= base + 2 && !built; d++) built = carve(d, want);
+    if (!built) built = carve(base + 2, want - 1) || carve(base + 2, 2);
+    const dim = built.dim, grid = built.grid, chosen = built.chosen;
+
+    const L = jigsawLayout();
+    const order = shuffled(chosen.map((_, i) => i));
+
+    /* Shelf-pack wraps on width only, so a tall set of pieces can run off the
+       bottom of the tray. Pack first, then shrink the cell until the whole
+       tray fits — the grid uses the same cell size, so they stay 1:1. */
+    function pack(cs){
+      const gap = Math.max(6, cs * 0.14);
+      const spots = [];
+      let tx = 0, ty = 0, rowH = 0;
+      order.forEach(pi => {
+        const p = chosen[pi];
+        const w = p.bb.w * cs, h = p.bb.h * cs;
+        if (tx + w > L.side && tx > 0){ tx = 0; ty += rowH + gap; rowH = 0; }
+        spots.push({ pi:pi, x:tx, y:ty, w:w, h:h });
+        tx += w + gap;
+        rowH = Math.max(rowH, h);
+      });
+      return { spots:spots, height: ty + rowH };
+    }
+
+    /* The grid keeps the full board square. Only the TRAY shrinks to fit —
+       previously both used one cell size, so a tall set of pieces dragged the
+       whole board down with it and the grid ended up using a quarter of the
+       screen. Tray pieces are rendered small and grown to grid scale when
+       picked up. */
+    const cs = Math.floor(L.side / dim);
+    let csTray = cs, packed = pack(csTray), tries = 0;
+    while (packed.height > L.side && tries++ < 8){
+      csTray = Math.max(14, Math.floor(csTray * (L.side / packed.height) * 0.97));
+      packed = pack(csTray);
+    }
+
+    const ox = L.bx + (L.side - dim * cs) / 2;
+    const oy = L.by + (L.side - dim * cs) / 2;
+    tet = { grid:grid, dim:dim, cs:cs, ox:ox, oy:oy,
+            total:chosen.length, placed:0, regions:[] };
+
+    /* Fusion mode only: blocks sit ~70% of the cell so the cue outline has a
+       clear margin and never paints over them. Cue widths are clamped to that
+       margin, so on a small board the highlight gets thinner rather than
+       spilling onto a block. */
+    const insetOf = size => state.fusion ? Math.max(3, Math.round(size * 0.15)) : 0;
+    const inset = insetOf(cs);
+    tet.inset = inset;
+    tet.insetOf = insetOf;
+    const cueW  = inset ? Math.max(3, Math.min(Math.round(cs * 0.075), inset - 1)) : 4;
+    const cueLit= inset ? Math.max(cueW + 2, Math.min(Math.round(cs * 0.16), inset - 1)) : 9;
+    const cueIn = Math.max(2, Math.round(cueW / 2));
+    field.style.setProperty('--cue-w', cueW + 'px');
+    field.style.setProperty('--cue-lit', cueLit + 'px');
+    jig = { total:chosen.length, placed:0 };
+
+    const bothInk = inkFor('both');
+
+    /* Eyes are decided before anything is drawn, because in fusion mode the
+       hole has to be inked for the OTHER eye than its piece. */
+    const eyeOf = {};
+    let cueBySig = null;
+    if (state.fusion){
+      /* Two holes of the same shape are interchangeable, so the cue eye has
+         to be a property of the SHAPE, not of one hole. Assign it per hole
+         and a duplicate pair can end up with piece and cue on the same eye —
+         that pairing is then solvable with one eye, which defeats fusion
+         entirely. Groups are handed out largest-first to the eye currently
+         holding fewer pieces, to keep the split near even. */
+      const counts = {};
+      chosen.forEach(p => { const s = sigOf(p.cells); counts[s] = (counts[s] || 0) + 1; });
+      cueBySig = {};
+      let nL = 0, nR = 0;
+      Object.keys(counts).sort((a, b) => counts[b] - counts[a]).forEach(s => {
+        const pieceEye = nL <= nR ? 'L' : 'R';
+        if (pieceEye === 'L') nL += counts[s]; else nR += counts[s];
+        cueBySig[s] = otherEye(pieceEye);
+      });
+      chosen.forEach((p, id) => {
+        eyeOf[id] = state.eyePlan === 'alt'
+          ? otherEye(cueBySig[sigOf(p.cells)]) : state.eyePlan;
+      });
+    } else {
+      packed.spots.forEach((s, k) => {
+        eyeOf[s.pi] = state.eyePlan === 'alt' ? (k % 2 === 0 ? 'L' : 'R') : state.eyePlan;
+      });
+    }
+    const cueFor = sig => state.eyePlan === 'alt' ? cueBySig[sig] : otherEye(state.eyePlan);
+
+    /* Fusion off: wall only where the grid is solid, so the holes read as
+       gaps in it — the ordinary Tetris look.
+
+       Fusion ON: the wall must cover EVERY cell. A solid binocular wall
+       around an empty gap hands the hole's position and shape to either eye
+       on its own, which makes the monocular cue redundant and defeats the
+       split entirely. A uniform grid means the cue is the only thing that
+       says where a piece goes, and the cue needs the other eye. */
+    for (let r = 0; r < dim; r++){
+      for (let c = 0; c < dim; c++){
+        if (!state.fusion && grid[r][c] !== 1) continue;
+        const w = blockEl([[0,0]], { c0:0, r0:0, w:1, h:1 }, cs, bothInk, 'wall', inset);
+        w.style.left = (ox + c * cs) + 'px';
+        w.style.top  = (oy + r * cs) + 'px';
+      }
+    }
+    if (state.fusion) addFrame(ox, oy, dim * cs, dim * cs, bothInk);
+
+    /* One outlined region per hole. Borders are dropped on edges shared with
+       another cell of the same hole, which leaves a single clean perimeter. */
+    chosen.forEach((p, id) => {
+      const inRegion = new Set(p.at.map(q => q[0] + ',' + q[1]));
+      const el = document.createElement('div');
+      el.className = 'gapgroup';
+      el.dataset.region = String(id);
+      el.dataset.sig = sigOf(p.cells);
+      el.style.color = state.fusion ? inkFor(cueFor(sigOf(p.cells))) : bothInk;
+      p.at.forEach(q => {
+        const d = document.createElement('i');
+        d.style.left = (ox + q[0] * cs) + 'px';
+        d.style.top  = (oy + q[1] * cs) + 'px';
+        d.style.width = cs + 'px';
+        d.style.height = cs + 'px';
+        /* Internal divisions are drawn, not suppressed: the piece is made of
+           visibly separate squares, so a hole showing only its outer hull
+           does not read as the same object. Each shared edge is drawn once —
+           from the left/top cell only, or the two neighbours' borders would
+           stack into a double-weight line — and thinner than the perimeter,
+           so the hole still reads as one shape rather than loose cells. */
+        if (inRegion.has(q[0] + ',' + (q[1] - 1))) d.style.borderTopWidth = '0';
+        if (inRegion.has((q[0] - 1) + ',' + q[1])) d.style.borderLeftWidth = '0';
+        /* Inline, so these stay thin even when .lit thickens the perimeter. */
+        if (inRegion.has(q[0] + ',' + (q[1] + 1))) d.style.borderBottomWidth = cueIn + 'px';
+        if (inRegion.has((q[0] + 1) + ',' + q[1])) d.style.borderRightWidth = cueIn + 'px';
+        el.appendChild(d);
+      });
+      field.appendChild(el);
+      tet.regions.push({ cells:p.at, el:el, key:cellKey(p.at) });
+    });
+
+    packed.spots.forEach((s, k) => {
+      const p = chosen[s.pi];
+      const tx = L.tx + s.x, ty = L.ty + s.y, w = s.w, h = s.h;
+      const eye = eyeOf[s.pi];
+      const el = blockEl(p.cells, p.bb, csTray, inkFor(eye), 'piece', insetOf(csTray));
+      el.dataset.csTray = String(csTray);
+      el.style.left = tx + 'px'; el.style.top = ty + 'px';
+      el.dataset.eye = eye;
+      el.dataset.cells = JSON.stringify(p.cells);
+      el.dataset.bb = JSON.stringify(p.bb);
+      el.dataset.sig = sigOf(p.cells);
+      el.dataset.home = JSON.stringify({ x: tx + w/2, y: ty + h/2 });
+      el.addEventListener('pointerdown', onGrab);
+    });
+  }
+
+  /* Redraw a block piece at a different cell size in place. */
+  function rescaleBlocks(el, size){
+    const cells = JSON.parse(el.dataset.cells), bb = JSON.parse(el.dataset.bb);
+    const m = tet.insetOf ? tet.insetOf(size) : 0;
+    el.style.width = bb.w * size + 'px';
+    el.style.height = bb.h * size + 'px';
+    const blocks = el.querySelectorAll('i');
+    cells.forEach((p, i) => {
+      const b = blocks[i];
+      if (!b) return;
+      b.style.left = ((p[0] - bb.c0) * size + m) + 'px';
+      b.style.top  = ((p[1] - bb.r0) * size + m) + 'px';
+      b.style.width = (size - 2 * m) + 'px';
+      b.style.height = (size - 2 * m) + 'px';
+      b.style.boxShadow = m ? 'none' : '';
+    });
+  }
+
+  /* Picked up, a tray piece grows to grid scale under the finger, so it can
+     be compared to the holes at the size it will actually occupy. */
+  function growPiece(el, e){
+    if (state.mode !== 'blocks' || !tet || el.dataset.scaled === '1') return;
+    const from = Number(el.dataset.csTray);
+    if (!from || from === tet.cs) return;
+    const k = tet.cs / from;
+    const relX = e.clientX - el.offsetLeft, relY = e.clientY - el.offsetTop;
+    rescaleBlocks(el, tet.cs);
+    el.style.left = (e.clientX - relX * k) + 'px';
+    el.style.top  = (e.clientY - relY * k) + 'px';
+    el.dataset.scaled = '1';
+  }
+
+  function shrinkPiece(el){
+    if (el.dataset.scaled !== '1') return;
+    rescaleBlocks(el, Number(el.dataset.csTray));
+    el.dataset.scaled = '0';
+  }
+
+  function dropBlock(el, home){
+    const cs = tet.cs;
+    const bx = Math.round((el.offsetLeft - tet.ox) / cs);
+    const by = Math.round((el.offsetTop  - tet.oy) / cs);
+    const cells = JSON.parse(el.dataset.cells), bb = JSON.parse(el.dataset.bb);
+
+    /* A placement must fill one whole hole exactly, not merely land on free
+       cells. Accepting any free cells lets a piece straddle two adjacent
+       holes and leave a remainder nothing can fill, which would break the
+       "solvable by construction" guarantee. Matching whole holes keeps it,
+       and still allows two identically shaped holes to be swapped. */
+    const open = tet.regions.filter(rg => rg.cells.every(p => tet.grid[p[1]][p[0]] === 0));
+
+    /* Forgiving by a whole cell in each direction: a three year old's aim is
+       not going to land inside half a cell, and a near miss that springs back
+       reads to him as the app being wrong. */
+    let gx = null, gy = null, at = null;
+    for (const d of [[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){
+      const test = cells.map(p => [p[0] - bb.c0 + bx + d[0], p[1] - bb.r0 + by + d[1]]);
+      const key = cellKey(test);
+      if (open.some(rg => rg.key === key)){ gx = bx + d[0]; gy = by + d[1]; at = test; break; }
+    }
+
+    if (at){
+      at.forEach(p => { tet.grid[p[1]][p[0]] = 2; });
+      tet.regions.forEach(rg => {
+        if (rg.cells.every(p => tet.grid[p[1]][p[0]] === 2)) rg.el.classList.add('done');
+      });
+      el.classList.add('locked');
+      moveTo(el, tet.ox + (gx + bb.w/2) * cs, tet.oy + (gy + bb.h/2) * cs, true);
+
+      state.hits += 1;
+      tet.placed += 1; jig.placed = tet.placed;
+      record(el.dataset.eye || state.curEye, true, performance.now() - state.t0);
+      state.t0 = performance.now();
+      sayYes(); buzz(12); paintHud();
+
+      if (tet.placed >= tet.total){
+        celebrate({ x: tet.ox + tet.dim * cs / 2, y: tet.oy + tet.dim * cs / 2 });
+        setTimeout(newRound, 1150);
+      }
+      return;
+    }
+    /* Only count it against him if he actually aimed at the grid. */
+    const onGrid = bx > -bb.w && by > -bb.h && bx < tet.dim && by < tet.dim;
+    if (onGrid) stumble(el);
+    shrinkPiece(el);
+    goHome(el, home);
+  }
+
+  /* Picking a piece up lights every hole it would fit. The therapy here is
+     localising a monocular object against a binocular frame — the matching
+     puzzle on top of it is not the point, so scaffolding it costs nothing
+     clinically and makes the game playable at three. */
+  function litRegions(on, el){
+    if (state.mode !== 'blocks' || !tet) return;
+    if (!state.assist) return;
+    tet.regions.forEach(rg => {
+      const open = rg.cells.some(p => tet.grid[p[1]][p[0]] === 0);
+      const match = on && open && rg.el.dataset.sig === el.dataset.sig;
+      rg.el.classList.toggle('lit', !!match);
+    });
+  }
+
+  function buildJigsaw(){
+    const n = GRIDS[state.pieces] ? state.pieces : 4;
+    const cols = GRIDS[n][0], rows = GRIDS[n][1];
+    const L = jigsawLayout();
+    const cw = L.side / cols, ch = L.side / rows;
+    const pic = usePicture() ? layers() : null;
+    picThumb = pic ? pic.both : null;
+    state.goal = pic ? null : pickShapes(1)[0];
+    jig = { total: cols * rows, placed: 0 };
+
+    /* Decide eyes first: in fusion mode a cell's ghost is inked for the
+       OTHER eye than the piece that belongs in it, so seeing a piece and
+       seeing where it goes require both eyes at the same time. */
+    const order = shuffled(Array.from({ length: cols * rows }, (_, i) => i));
+    const eyeOf = {};
+    order.forEach((idx, k) => {
+      eyeOf[idx] = state.eyePlan === 'alt' ? (k % 2 === 0 ? 'L' : 'R') : state.eyePlan;
+    });
+
+    for (let r = 0; r < rows; r++){
+      for (let c = 0; c < cols; c++){
+        const idx = r * cols + c;
+        const x = L.bx + c * cw, y = L.by + r * ch;
+        const cue = state.fusion ? otherEye(eyeOf[idx]) : 'both';
+        const art = pic ? { url: pic[cue] || pic.both }
+                        : { shape:state.goal, color:inkFor(cue) };
+        const cell = tile(art, 'cell', x, y, cw, ch, c, r, L.side);
+        cell.dataset.idx = String(idx);
+        jigCells.push({ idx:idx, x:x + cw/2, y:y + ch/2 });
+      }
+    }
+    if (state.fusion) addFrame(L.bx, L.by, L.side, L.side, inkFor('both'));
+
+    /* Pieces sit in a tidy tray grid rather than a random scatter: easier
+       for small hands to grab, and it cannot overlap. Slot order is
+       shuffled, so position gives nothing away, and a few pixels of jitter
+       keeps it from looking machine-stamped. */
+    order.forEach((idx, k) => {
+      const c = idx % cols, r = Math.floor(idx / cols);
+      const sc = k % cols, sr = Math.floor(k / cols);
+      const jx = (Math.random() - 0.5) * 10, jy = (Math.random() - 0.5) * 10;
+      const x = L.tx + sc * cw + jx, y = L.ty + sr * ch + jy;
+      const eye = eyeOf[idx];
+      const art = pic ? { url: pic[eye] || pic.both } : { shape:state.goal, color:inkFor(eye) };
+      const p = tile(art, 'piece', x, y, cw, ch, c, r, L.side);
+      p.dataset.idx = String(idx);
+      p.dataset.eye = eye;
+      p.dataset.home = JSON.stringify({ x: x + cw/2, y: y + ch/2 });
+      p.addEventListener('pointerdown', onGrab);
+    });
+  }
+
+  function buildTap(){
+    const n = Math.max(1, Math.min(3, state.taps));
+    const shapes = pickShapes(n);
+    const spots = place(n);
+    const winner = Math.floor(Math.random() * n);
+    state.goal = shapes[winner];
+
+    shapes.forEach((shape, i) => {
+      const eye = (state.mix && i !== winner) ? otherEye(state.curEye) : state.curEye;
+      const el = makeThing(shape, inkFor(eye), 'target', spots[i]);
+      el.dataset.win = String(i === winner);
+      el.addEventListener('pointerup', onTap);
+    });
+  }
+
+  function buildSort(){
+    const n = Math.max(1, Math.min(3, state.holes));
+    const shapes = pickShapes(n);
+    const spots = place(n + 1);
+    const winner = Math.floor(Math.random() * n);
+    state.goal = shapes[winner];
+
+    /* Fusion: the holes go to the eye that is NOT holding the piece, so he
+       cannot see what he is carrying and where it belongs with one eye. All
+       holes take the same eye — a decoy visible to the piece's eye would let
+       him narrow it down by elimination. */
+    const holeEye = state.fusion ? otherEye(state.curEye) : 'both';
+    const holeCls = state.fusion ? 'hole cue' : 'hole';
+    shapes.forEach((shape, i) => makeThing(shape, inkFor(holeEye), holeCls, spots[i]));
+    if (state.fusion){
+      const pad = 14;
+      addFrame(pad, HUD_CLEARANCE, field.clientWidth - pad * 2,
+               field.clientHeight - HUD_CLEARANCE - pad, inkFor('both'));
+    }
+    const piece = makeThing(state.goal, inkFor(state.curEye), 'piece', spots[n]);
+    piece.dataset.home = JSON.stringify(spots[n]);
+    piece.addEventListener('pointerdown', onGrab);
+  }
+
+  /* ---------- interaction ---------- */
+  function onTap(e){
+    e.stopPropagation();
+    audio();
+    const el = e.currentTarget;
+    if (el.classList.contains('pop') || el.classList.contains('locked')) return;
+    if (el.dataset.win === 'true') succeed(el);
+    else stumble(el);
+  }
+
+  /* ---------- dragging ----------
+     Position is always left/top, but while a piece is in hand it is offset
+     with a composited transform and left/top are left alone. Mutating
+     left/top every frame repaints the element in place, and iOS Safari
+     invalidates only the border box — anything painting outside it (a
+     drop-shadow, an antialiased edge) smears a trail behind the piece. On
+     release the offset is committed to left/top and the transform cleared,
+     so hit testing can go on reading offsetLeft. */
+  let drag = null;
+
+  function onGrab(e){
+    audio();
+    const el = e.currentTarget;
+    if (el.classList.contains('pop') || el.classList.contains('locked')) return;
+    /* A toddler will put a second finger down mid-drag. Without an owner
+       check the new pointer overwrites `drag` while capture and listeners
+       stay on the first element, and a release from either one moves or
+       scores the wrong piece. */
+    if (drag) return;
+    drag = { el:el, sx:e.clientX, sy:e.clientY, id:e.pointerId };
+    el.style.transition = '';
+    el.classList.add('held');
+    growPiece(el, e);
+    litRegions(true, el);
+    try{ el.setPointerCapture(e.pointerId); }catch(_){}
+    el.addEventListener('pointermove', onDrag);
+    el.addEventListener('pointerup', onDrop);
+    el.addEventListener('pointercancel', onDrop);
+  }
+
+  function onDrag(e){
+    if (!drag || e.pointerId !== drag.id) return;
+    drag.el.style.transform = 'translate3d(' + (e.clientX - drag.sx) + 'px,' +
+                              (e.clientY - drag.sy) + 'px,0) scale(1.05)';
+  }
+
+  /* Slide to a point, animating the transform and then settling into
+     left/top so the element's own geometry stays the source of truth. */
+  function moveTo(el, cx, cy, animate){
+    const tx = cx - el.offsetWidth / 2, ty = cy - el.offsetHeight / 2;
+    if (!animate){
+      el.style.transition = ''; el.style.transform = '';
+      el.style.left = tx + 'px'; el.style.top = ty + 'px';
+      return;
+    }
+    const dx = tx - el.offsetLeft, dy = ty - el.offsetTop;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      el.removeEventListener('transitionend', settle);
+      el.style.transition = ''; el.style.transform = '';
+      el.style.left = tx + 'px'; el.style.top = ty + 'px';
+      el.style.willChange = '';
+    };
+    el.addEventListener('transitionend', settle);
+    el.style.transition = 'transform .2s cubic-bezier(.32,.72,0,1)';
+    el.style.transform = 'translate3d(' + dx + 'px,' + dy + 'px,0)';
+    setTimeout(settle, 340);   // transitionend can be skipped if dx and dy are 0
+  }
+
+  function onDrop(e){
+    if (!drag || e.pointerId !== drag.id) return;
+    /* A cancelled pointer is the browser taking the gesture away, not a
+       wrong answer: return the piece home without scoring a miss. */
+    const cancelled = e.type === 'pointercancel';
+    const el = drag.el, home = JSON.parse(el.dataset.home);
+    /* Commit the drag offset to left/top before anything measures it. */
+    el.style.left = (el.offsetLeft + (e.clientX - drag.sx)) + 'px';
+    el.style.top  = (el.offsetTop  + (e.clientY - drag.sy)) + 'px';
+    el.style.transform = '';
+    el.classList.remove('held');
+    litRegions(false, el);
+    el.removeEventListener('pointermove', onDrag);
+    el.removeEventListener('pointerup', onDrop);
+    el.removeEventListener('pointercancel', onDrop);
+    drag = null;
+
+    if (cancelled){ goHome(el, home); return; }
+    if (state.mode === 'jigsaw'){ dropPiece(el, home); return; }
+    if (state.mode === 'blocks'){ dropBlock(el, home); return; }
+
+    const c = centerOf(el);
+    let near = null, nearD = Infinity;
+    field.querySelectorAll('.hole').forEach(h => {
+      const hc = centerOf(h), d = Math.hypot(c.x - hc.x, c.y - hc.y);
+      if (d < nearD){ nearD = d; near = h; }
+    });
+
+    if (near && nearD < sizePx() * 0.78){
+      if (near.dataset.shape === el.dataset.shape){
+        const hc = centerOf(near);
+        moveTo(el, hc.x, hc.y, true);
+        near.remove();
+        succeed(el);
+        return;
+      }
+      stumble(el);
+    }
+    goHome(el, home);
+  }
+
+  function dropPiece(el, home){
+    const c = centerOf(el);
+    let near = null, nearD = Infinity;
+    for (const cell of jigCells){
+      const d = Math.hypot(c.x - cell.x, c.y - cell.y);
+      if (d < nearD){ nearD = d; near = cell; }
+    }
+    if (near && nearD < Math.max(el.offsetWidth, el.offsetHeight) * 0.72){
+      if (String(near.idx) === el.dataset.idx){
+        el.classList.add('locked');
+        moveTo(el, near.x, near.y, true);
+        const ghost = field.querySelector('.cell[data-idx="' + near.idx + '"]');
+        if (ghost) ghost.style.opacity = '0';
+
+        state.hits += 1;
+        jig.placed += 1;
+        record(el.dataset.eye || state.curEye, true, performance.now() - state.t0);
+        state.t0 = performance.now();
+        sayYes(); buzz(12); paintHud();
+
+        if (jig.placed >= jig.total){
+          celebrate({ x: field.clientWidth / 2, y: field.clientHeight / 2 });
+          setTimeout(newRound, 1150);
+        }
+        return;
+      }
+      stumble(el);
+    }
+    goHome(el, home);
+  }
+
+  function goHome(el, home){
+    moveTo(el, home.x, home.y, true);
+  }
+
+  function succeed(el){
+    state.hits += 1;
+    record(state.curEye, true, performance.now() - state.t0);
+    sayYes();
+    buzz(12);
+    el.classList.add('pop');
+    paintHud();
+    const party = state.hits % 5 === 0;
+    if (party) celebrate(centerOf(el));
+    setTimeout(newRound, party ? 900 : 380);
+  }
+
+  function stumble(el){
+    state.misses += 1;
+    record(el.dataset.eye || state.curEye, false, 0);
+    sayNo();
+    buzz(30);
+    el.classList.remove('shake');
+    void el.offsetWidth;
+    el.classList.add('shake');
+  }
+
+  function buzz(ms){
+    /* iOS Safari has never shipped the Vibration API, so this is a
+       no-op on the iPad. Sound carries the feedback there. */
+    if (navigator.vibrate) navigator.vibrate(ms);
+  }
+
+  function celebrate(at){
+    sayParty();
+    const layer = $('burst'), pool = shapePool(), ink = inkFor('both');
+    for (let i = 0; i < 16; i++){
+      const s = document.createElement('span');
+      const ang = (i / 16) * Math.PI * 2 + Math.random() * 0.4;
+      const dist = 120 + Math.random() * 180;
+      const d = 18 + Math.random() * 26;
+      s.style.setProperty('--d', d + 'px');
+      s.style.setProperty('--tx', Math.cos(ang) * dist + 'px');
+      s.style.setProperty('--ty', Math.sin(ang) * dist + 'px');
+      s.style.setProperty('--rot', Math.round(Math.random() * 540 - 270) + 'deg');
+      s.style.left = at.x + 'px';
+      s.style.top  = at.y + 'px';
+      s.style.color = ink;
+      s.innerHTML = svgFor(pool[Math.floor(Math.random() * pool.length)]);
+      layer.appendChild(s);
+      setTimeout(() => s.remove(), 1000);
+    }
+  }
+
+  /* ---------- session log ----------
+     Kept per day and per eye. If one eye is slower or misses more, that is
+     the number a clinician would want. */
+  /* Local day, not UTC: toISOString rolls over at 7 or 8pm in US time
+     zones, filing an evening session under tomorrow. */
+  function today(){
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+           '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function record(eye, hit, ms){
+    const log = store.get(LOG_KEY, {});
+    const day = log[today()] || (log[today()] = {});
+    const e = day[eye] || (day[eye] = { hits:0, misses:0, ms:0 });
+    if (hit){ e.hits += 1; e.ms += Math.round(ms); } else e.misses += 1;
+    store.set(LOG_KEY, log);
+  }
+
+  function paintStats(){
+    const log = store.get(LOG_KEY, {});
+    const day = log[today()];
+    if (!day || !Object.keys(day).length){ $('statLine').textContent = 'No taps yet today.'; return; }
+    const name = { L:'left ', R:'right', both:'both ' };
+    const lines = ['this session   ' + state.hits + ' right, ' + state.misses + ' wrong', ''];
+    Object.keys(day).sort().forEach(eye => {
+      const e = day[eye];
+      const avg = e.hits ? (e.ms / e.hits / 1000).toFixed(1) + 's' : '  —';
+      lines.push('today ' + (name[eye] || eye) + '   ' +
+                 String(e.hits).padStart(3) + ' right   ' +
+                 String(e.misses).padStart(3) + ' wrong   ' +
+                 avg.padStart(5) + ' avg');
+    });
+    $('statLine').textContent = lines.join('\n');
+  }
+
+  /* ---------- painting ---------- */
+  function paintHud(){
+    $('hitCount').textContent = String(state.hits);
+    const lit = state.hits % 5;
+    [...$('pips').children].forEach((p, i) => p.classList.toggle('lit', i < (lit === 0 && state.hits ? 5 : lit)));
+
+    const tag = $('eyeTag');
+    tag.classList.toggle('hide', !state.showTag);
+    tag.textContent = state.mode === 'jigsaw' ? 'LR'
+                    : (state.curEye === 'both' ? 'LR' : state.curEye);
+
+    const p = $('prompt');
+    if (state.mode === 'blocks'){
+      p.classList.remove('hide');
+      $('promptArt').innerHTML = '';
+      const left = jig.total - jig.placed;
+      $('promptText').textContent = left <= 0 ? 'Done' : left + ' to go';
+      return;
+    }
+    if (state.mode === 'jigsaw' && (state.goal || picThumb)){
+      p.classList.remove('hide');
+      $('promptArt').innerHTML = picThumb
+        ? '<img src="' + picThumb + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:5px">'
+        : svgFor(state.goal);
+      const left = jig.total - jig.placed;
+      $('promptText').textContent = left === 0 ? 'Done' : left + ' to go';
+      return;
+    }
+    const many = state.mode === 'tap' ? state.taps > 1 : state.holes > 1;
+    p.classList.toggle('hide', !(many && state.goal));
+    if (many && state.goal){
+      $('promptArt').innerHTML = svgFor(state.goal);
+      $('promptText').textContent = state.mode === 'sort' ? 'Its hole' : 'Find this one';
+    }
+  }
+
+  function paintPreview(){
+    const pv = $('preview');
+    pv.style.background = state.bg;
+    pv.innerHTML = '';
+    const demo = state.mode === 'sort' ? [['both', 0.3], [state.curEye, 1]] : [[state.curEye, 1]];
+    const pool = shapePool();
+    demo.forEach(([eye, op], i) => {
+      const s = document.createElement('span');
+      s.style.color = inkFor(eye);
+      s.style.opacity = op;
+      s.innerHTML = svgFor(pool[i % pool.length]);
+      pv.appendChild(s);
+    });
+  }
+
+  function paintLeak(){
+    const r = reading('red'), g = reading('green');
+    const worst = Math.max(r.ghost, g.ghost);
+    const faint = Math.min(r.own, g.own) < 0.3;
+    const pct = Math.round(worst * 100);
+
+    /* Per-ink numbers, so it is obvious which one needs the nudge. */
+    const onWhite = (state.bg || '#000000').toLowerCase() === '#ffffff';
+    const eyeOf = key => (((key === 'red') !== onWhite) ? 'red-lens' : 'other');
+    $('leakRed').textContent = [
+      ['red', state.red], ['green', state.green]
+    ].map(([k, hex]) => {
+      const d = reading(k);
+      return hex + '  ' + eyeOf(k).padEnd(9) + 'eye sees ' +
+             (d.own * 100).toFixed(0).padStart(3) + '%   other eye ' +
+             (d.wrong * 100).toFixed(0).padStart(3) + '%   ghost ' +
+             (d.ghost * 100).toFixed(0).padStart(3) + '%';
+    }).join('\n');
+    const dot = $('leak').querySelector('i');
+    const txt = $('leak').querySelector('span');
+    if (faint){
+      dot.style.background = 'var(--warn)';
+      txt.innerHTML = '<b>Too faint.</b> One ink barely stands out from the field for its own eye.';
+    } else if (pct <= 6){
+      dot.style.background = 'var(--good)';
+      txt.innerHTML = '<b>Clean.</b> Each ink reaches one eye and not the other.';
+    } else if (pct <= 20){
+      dot.style.background = '#D8B14A';
+      txt.innerHTML = '<b>' + pct + '% ghosting.</b> A faint copy reaches the wrong eye.';
+    } else {
+      dot.style.background = 'var(--warn)';
+      txt.innerHTML = '<b>' + pct + '% ghosting.</b> The wrong eye can still see it, so the exercise will not work.';
+    }
+    const standard = state.red.toLowerCase() === '#ff0000' && state.green.toLowerCase() === '#00ff00';
+    $('inkNote').textContent = standard
+      ? 'Standard red and green.'
+      : 'Tuned · red ' + state.red + ' · ' + LENS[state.pair].name + ' ' + state.green;
+  }
+
+  function paint(){
+    root.style.setProperty('--bg', state.bg);
+    root.style.setProperty('--size', state.size);
+    document.querySelector('meta[name="theme-color"]').setAttribute('content', state.bg);
+
+    const light = state.bg.toLowerCase() === '#ffffff';
+    root.style.setProperty('--chrome-ink', light ? '#101010' : '#ffffff');
+    root.style.setProperty('--chrome-fill', light ? 'rgba(255,255,255,.62)' : 'rgba(0,0,0,.42)');
+    root.style.setProperty('--chrome-edge', light ? 'rgba(0,0,0,.18)' : 'rgba(255,255,255,.22)');
+
+    const gridded = state.mode === 'jigsaw' || state.mode === 'blocks';
+    $('pieceRow').classList.toggle('hide', !gridded);
+    $('picRow').classList.toggle('hide', state.mode !== 'jigsaw');
+    $('tapRow').classList.toggle('hide', state.mode !== 'tap');
+    $('sortRow').classList.toggle('hide', state.mode !== 'sort');
+    $('sizeRow').classList.toggle('off', gridded);
+    $('mixRow').classList.toggle('off', state.mode !== 'tap' || state.taps < 2);
+    $('assistRow').classList.toggle('off', state.mode !== 'blocks');
+    /* Tap mode has nowhere to put the cue: its goal sits in the HUD chip,
+       whose translucent background is not the field colour, so an ink
+       drawn there would not carry its calculated contrast. */
+    $('fusionRow').classList.toggle('off', state.mode === 'tap');
+    /* A single-eye plan still works — pieces to that eye, cues to the other.
+       Only "Both" degenerates, because there is no other eye to cue with. */
+    if (state.fusion && state.eyePlan === 'both'){
+      $('fusionNote').textContent = 'Has no effect while "Which eye works" is set to Both — there is no other eye to put the cue on.';
+    }
+    $('modeNote').textContent =
+      state.mode === 'jigsaw' ? 'Build the picture, one piece at a time.'
+    : state.mode === 'blocks' ? 'Drop each block into the hole it fits. Shape set picks small blocks or full tetrominoes.'
+    : state.mode === 'sort'   ? 'Drag the bright piece onto the dim hole that matches it.'
+    :                           'Touch the shape wherever it lands.';
+    $('eyeNote').textContent = state.eyePlan === 'alt'
+      ? (gridded ? 'Balanced: half the pieces per eye. He picks his own order, so it is an even mix, not a strict sequence.'
+                 : 'Strict left, right, left, right.')
+      : (state.eyePlan === 'both' ? 'Both eyes see every shape. No training value, but a nice warm up.'
+                                  : 'Every shape goes to the ' + (state.eyePlan === 'L' ? 'left' : 'right') + ' eye.');
+    $('sizeNote').textContent = state.size + '% of the short side';
+
+    paintPreview(); paintLeak(); paintStats(); paintHud();
+  }
+
+  function persist(){
+    store.set(GAME_KEY, {
+      mode:state.mode, pieces:state.pieces, taps:state.taps, holes:state.holes,
+      shapeSet:state.shapeSet, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
+      mix:state.mix, showTag:state.showTag, sound:state.sound, childLock:state.childLock,
+      assist:state.assist, fusion:state.fusion,
+      picture:state.picture, tones:state.tones, picBias:state.picBias, picIdx:state.picIdx
+    });
+    store.set(CALIB_KEY, {
+      red:state.red, green:state.green, pair:state.pair,
+      bluePass:state.bluePass, redBlue:state.redBlue, redSide:state.redSide
+    });
+  }
+
+  /* ---------- wiring ---------- */
+  function mark(sel, attr, value){
+    document.querySelectorAll(sel).forEach(b => b.classList.toggle('on', b.dataset[attr] === value));
+  }
+
+  function group(containerId, handler){
+    const box = $(containerId);
+    box.addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (!btn || !box.contains(btn)) return;
+      [...box.querySelectorAll('button')].forEach(b => b.classList.toggle('on', b === btn));
+      handler(btn);
+      persist(); paint(); newRound();
+    });
+  }
+
+  function toggle(id, key, after){
+    const btn = $(id);
+    btn.addEventListener('click', () => {
+      state[key] = !state[key];
+      btn.classList.toggle('on', state[key]);
+      btn.setAttribute('aria-checked', String(state[key]));
+      persist();
+      if (after) after();
+    });
+  }
+
+  group('modeChips',  btn => { state.mode = btn.dataset.mode; });
+  group('pieceChips', btn => { state.pieces = Number(btn.dataset.n); });
+  group('tapChips',   btn => { state.taps = Number(btn.dataset.n); });
+  group('holeChips',  btn => { state.holes = Number(btn.dataset.n); });
+  group('shapeChips', btn => { state.shapeSet = btn.dataset.set; });
+  group('picChips',   btn => { state.picture = btn.dataset.pic; });
+  group('toneChips',  btn => { state.tones = Number(btn.dataset.tones); });
+  group('bgChips',    btn => { state.bg = btn.dataset.bg; calibBg = state.bg; });
+  group('eyeChips',   btn => { state.eyePlan = btn.dataset.eye; state.round = 0; });
+  group('lensChips',  btn => { state.redSide = btn.dataset.red; });
+  group('pairChips',  btn => {
+    state.pair = btn.dataset.pair;
+    state.bluePass = LENS[state.pair].b;
+    state.green = defaultOther();
+    syncInkInputs();
+  });
+
+  toggle('mixEyes', 'mix', () => { paint(); newRound(); });
+  toggle('showTag', 'showTag', paintHud);
+  toggle('sound', 'sound');
+  toggle('childLock', 'childLock');
+  toggle('assist', 'assist');
+  toggle('fusion', 'fusion', () => { paint(); newRound(); });
+
+  /* Also the load-time sync: settings restored from storage have to show up
+     on the controls, or the sheet lies about what the game is doing. */
+  function syncInkInputs(){
+    $('inkRed').value = state.red;
+    $('inkGreen').value = state.green;
+    $('blueRange').value = Math.round(state.bluePass * 100);
+    $('blueVal').textContent = Math.round(state.bluePass * 100) + '%';
+    $('redRange').value = Math.round((state.redBlue || 0) * 100);
+    $('redVal').textContent = Math.round((state.redBlue || 0) * 100) + '%';
+    mark('#pairChips .chip', 'pair', state.pair);
+    mark('#eyeChips .chip', 'eye', state.eyePlan);
+    mark('#lensChips .chip', 'red', state.redSide);
+    mark('#modeChips .chip', 'mode', state.mode);
+    mark('#shapeChips .chip', 'set', state.shapeSet);
+    mark('#bgChips .chip', 'bg', state.bg);
+    mark('#pieceChips .chip', 'n', String(state.pieces));
+    mark('#picChips .chip', 'pic', state.picture);
+    mark('#toneChips .chip', 'tones', String(state.tones));
+    $('biasRange').value = state.picBias || 0;
+    $('biasVal').textContent = state.picBias || 0;
+    mark('#tapChips .chip', 'n', String(state.taps));
+    mark('#holeChips .chip', 'n', String(state.holes));
+    [['mixEyes','mix'], ['showTag','showTag'], ['sound','sound'], ['childLock','childLock'],
+     ['assist','assist'], ['fusion','fusion']]
+      .forEach(([id, key]) => {
+        $(id).classList.toggle('on', !!state[key]);
+        $(id).setAttribute('aria-checked', String(!!state[key]));
+      });
+  }
+
+  $('inkRed').addEventListener('input', () => {
+    state.red = $('inkRed').value; persist(); paint(); newRound();
+  });
+  $('inkGreen').addEventListener('input', () => {
+    state.green = $('inkGreen').value; persist(); paint(); newRound();
+  });
+  $('blueRange').addEventListener('input', () => {
+    state.bluePass = Number($('blueRange').value) / 100;
+    state.green = defaultOther();
+    syncInkInputs(); persist(); paint(); newRound();
+  });
+  /* ---------- picture gallery ---------- */
+  function paintGallery(){
+    const box = $('picGallery');
+    box.innerHTML = '';
+    pics.forEach((src, i) => {
+      const b = document.createElement('button');
+      b.className = 'thumb' + (i === state.picIdx ? ' on' : '');
+      b.dataset.i = String(i);
+      b.innerHTML = '<img src="' + src + '" alt="">';
+      box.appendChild(b);
+    });
+    $('picRemove').style.display = pics.length ? '' : 'none';
+    $('picNote').textContent = state.picture !== 'photo'
+      ? 'Built-in shapes.'
+      : (pics.length
+          ? 'Your picture, ' + (state.tones ? state.tones + ' tones.' : 'full greyscale.')
+          : 'Add a picture first — using shapes until you do.');
+  }
+
+  function reloadPicture(){
+    analyzePicture(() => { syncInkInputs(); paintGallery(); paint(); newRound(); });
+  }
+
+  $('picGallery').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    state.picIdx = Number(b.dataset.i);
+    state.picture = 'photo';
+    persist(); reloadPicture();
+  });
+
+  $('picFile').addEventListener('change', () => {
+    const file = $('picFile').files && $('picFile').files[0];
+    $('picFile').value = '';
+    if (!file) return;
+    const fr = new FileReader();
+    fr.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = c.height = PIC_SIZE;
+        /* Centre-crop to a square so any grid divides it evenly. */
+        const s = Math.min(img.width, img.height);
+        c.getContext('2d').drawImage(img, (img.width - s)/2, (img.height - s)/2, s, s,
+                                     0, 0, PIC_SIZE, PIC_SIZE);
+        pics.push(c.toDataURL('image/jpeg', 0.82));
+        while (pics.length > 6) pics.shift();
+        state.picIdx = pics.length - 1;
+        state.picture = 'photo';
+        store.set(PIC_KEY, pics);
+        persist(); reloadPicture();
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+
+  $('picRemove').addEventListener('click', () => {
+    if (!pics.length) return;
+    pics.splice(state.picIdx, 1);
+    state.picIdx = Math.max(0, Math.min(state.picIdx, pics.length - 1));
+    if (!pics.length) state.picture = 'shapes';
+    store.set(PIC_KEY, pics);
+    persist(); reloadPicture();
+  });
+
+  $('biasRange').addEventListener('input', () => {
+    state.picBias = Number($('biasRange').value);
+    $('biasVal').textContent = state.picBias;
+  });
+  $('biasRange').addEventListener('change', () => { persist(); paint(); newRound(); });
+
+  $('redRange').addEventListener('input', () => {
+    state.redBlue = Number($('redRange').value) / 100;
+    $('redVal').textContent = $('redRange').value + '%';
+    persist(); paint();
+  });
+  $('fixRed').addEventListener('click', () => {
+    state.red = bestInk('red'); syncInkInputs(); persist(); paint(); newRound();
+  });
+  $('fixGreen').addEventListener('click', () => {
+    state.green = bestInk('green'); syncInkInputs(); persist(); paint(); newRound();
+  });
+  $('inkStandard').addEventListener('click', () => {
+    state.red = '#ff0000';
+    state.green = defaultOther();
+    syncInkInputs(); persist(); paint(); newRound();
+  });
+
+  const sizeRange = $('sizeRange');
+  sizeRange.addEventListener('input', () => {
+    state.size = Number(sizeRange.value);
+    $('sizeNote').textContent = state.size + '% of the short side';
+  });
+  sizeRange.addEventListener('change', () => { persist(); paint(); newRound(); });
+
+  $('statReset').addEventListener('click', () => {
+    const log = store.get(LOG_KEY, {});
+    delete log[today()];
+    store.set(LOG_KEY, log);
+    state.hits = 0; state.misses = 0;
+    paint();
+  });
+
+  $('fullBtn').addEventListener('click', () => {
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen){
+      document.documentElement.requestFullscreen().catch(()=>{});
+    } else if (document.exitFullscreen){
+      document.exitFullscreen().catch(()=>{});
+    }
+  });
+
+  /* ---------- the settings sheet ----------
+     This was a long press. It did not work on the iPad: iOS Safari fires
+     pointercancel partway through a long press (it is deciding whether the
+     gesture is haptic touch or a selection), which killed the timer, and
+     there was then no way into the settings at all. Counting discrete taps
+     uses no gesture recognition, so nothing can cancel it. Default is a
+     plain tap; the childproof lock asks for three. */
+  const panel = $('panel'), scrim = $('scrim'), gear = $('gear');
+  let taps = [];
+
+  function openPanel(){
+    panel.classList.add('on'); scrim.classList.add('on');
+    panel.setAttribute('aria-hidden','false');
+    syncInkInputs(); sizeRange.value = state.size; paint();
+  }
+  function closePanel(){
+    panel.classList.remove('on'); scrim.classList.remove('on');
+    panel.setAttribute('aria-hidden','true');
+  }
+
+  gear.addEventListener('click', () => {
+    if (!state.childLock){ openPanel(); return; }
+    const now = performance.now();
+    taps = taps.filter(t => now - t < 1400);
+    taps.push(now);
+    gear.classList.toggle('arming', taps.length === 2);
+    if (taps.length >= 3){ taps = []; gear.classList.remove('arming'); openPanel(); }
+  });
+
+  $('done').addEventListener('click', () => { closePanel(); newRound(); });
+  scrim.addEventListener('click', () => { closePanel(); newRound(); });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && panel.classList.contains('on')){ closePanel(); newRound(); }
+    if (e.key.toLowerCase() === 's' && !panel.classList.contains('on')) openPanel();
+    if (e.key === 'n' && !panel.classList.contains('on')) newRound();
+  });
+
+  /* Tapping bare field is free: a miss only counts against a wrong shape. */
+  play.addEventListener('pointerdown', () => { audio(); });
+
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (!panel.classList.contains('on')) newRound(); }, 220);
+  });
+
+  let wakeLock = null;
+  async function keepAwake(){
+    /* Needs a secure context. Over plain http on the tailnet this quietly
+       does nothing; serve it over https and the iPad stops dimming. */
+    try{ if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch(_){}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') keepAwake();
+  });
+
+  keepAwake();
+  syncInkInputs();
+  paintGallery();
+  paint();
+  newRound();
+  /* Decoding the stored picture is async, so the first board is drawn from
+     shapes and swapped once the luminance map is ready. */
+  if (state.picture === 'photo' && pics.length) reloadPicture();
+  /* Escape hatch: whatever else is broken, this always opens the sheet. */
+  if (location.hash === '#settings') openPanel();
+})();
+</script>
+</body>
+</html>

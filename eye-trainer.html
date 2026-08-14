@@ -1,0 +1,1479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#000000" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<title>Anaglyph Letter Trainer</title>
+<style>
+  :root{
+    --bg:#000000;
+    --fg:#ff0000;
+    --size:42;
+    --count:1;
+    --weight:700;
+    --face: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+    --panel:#131A1B;
+    --panel-raised:#1B2426;
+    --hairline:#2C3A3B;
+    --panel-ink:#E6EDEA;
+    --panel-muted:#8DA09B;
+    --brass:#C9A227;
+    --brass-soft:rgba(201,162,39,.16);
+    --warn:#E4784A;
+
+    --chrome-ink:#ffffff;
+    --chrome-fill:rgba(0,0,0,.42);
+    --chrome-edge:rgba(255,255,255,.22);
+  }
+
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+
+  html,body{
+    margin:0; width:100%; height:100%;
+    overflow:hidden; background:var(--bg);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    touch-action:manipulation; overscroll-behavior:none;
+  }
+
+  /* ---------- training surface ---------- */
+  #screen{
+    position:fixed; inset:0;
+    display:grid; place-items:center;
+    background:var(--bg);
+    user-select:none; cursor:pointer;
+  }
+  #row{
+    display:flex; align-items:center; justify-content:center;
+    gap:.34em;
+    font-family:var(--face);
+    font-weight:var(--weight);
+    font-size:min(calc(var(--size) * 1vmin), calc(84vw / var(--count)));
+    line-height:1;
+  }
+  .glyph{
+    display:block;
+    transform:rotate(var(--rot,0deg));
+    transform-origin:center;
+    will-change:transform;
+  }
+
+  /* ---------- heads-up chrome ---------- */
+  #hud{
+    position:fixed; z-index:5;
+    top:calc(12px + env(safe-area-inset-top));
+    left:calc(12px + env(safe-area-inset-left));
+    right:calc(12px + env(safe-area-inset-right));
+    display:flex; align-items:center; justify-content:space-between;
+    gap:10px; pointer-events:none;
+  }
+  #reps{
+    pointer-events:auto;
+    display:flex; align-items:baseline; gap:7px;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    color:var(--chrome-ink);
+    background:var(--chrome-fill);
+    border:1px solid var(--chrome-edge);
+    border-radius:999px; padding:8px 14px;
+    backdrop-filter:blur(12px);
+  }
+  #reps b{font-size:15px; font-weight:600; letter-spacing:.04em;}
+  #reps span{font-size:9.5px; letter-spacing:.22em; opacity:.62;}
+  .chrome-btn{
+    pointer-events:auto;
+    min-width:46px; min-height:46px;
+    display:grid; place-items:center;
+    border:1px solid var(--chrome-edge);
+    background:var(--chrome-fill);
+    color:var(--chrome-ink);
+    border-radius:999px; font-size:19px;
+    backdrop-filter:blur(12px); cursor:pointer;
+  }
+  .chrome-row{display:flex; gap:8px; pointer-events:none;}
+
+  /* ---------- bottom control dock ---------- */
+  #dock{
+    position:fixed; z-index:6;
+    left:50%; bottom:calc(12px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    display:flex; flex-direction:column; align-items:center; gap:7px;
+    transition:transform .24s cubic-bezier(.32,.72,0,1);
+  }
+  #dock.shut{transform:translateX(-50%) translateY(calc(100% - 30px));}
+
+  #dockTab{
+    width:54px; height:26px; padding:0; border-radius:999px;
+    border:1px solid var(--chrome-edge);
+    background:var(--chrome-fill); color:var(--chrome-ink);
+    font-size:13px; line-height:1; cursor:pointer;
+    backdrop-filter:blur(12px);
+  }
+  #dockTab .caret{display:inline-block; transition:transform .24s ease;}
+  #dock.shut #dockTab .caret{transform:rotate(180deg);}
+
+  #dockBar{
+    display:flex; align-items:center; justify-content:center;
+    flex-wrap:wrap; gap:9px 11px;
+    padding:9px 13px; border-radius:18px;
+    border:1px solid var(--chrome-edge);
+    background:var(--chrome-fill);
+    backdrop-filter:blur(14px);
+    max-width:min(95vw, 560px);
+  }
+  .dock-group{display:flex; flex-direction:column; align-items:center; gap:5px;}
+  .dock-cap{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:8px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--chrome-ink); opacity:.55;
+  }
+  .dock-set{display:flex; align-items:center; gap:6px;}
+  .dock-rule{width:1px; align-self:stretch; background:var(--chrome-edge); margin:3px 0;}
+
+  .dot{
+    width:27px; height:27px; padding:0; border-radius:999px;
+    border:1px solid rgba(128,128,128,.55); cursor:pointer;
+    transition:box-shadow .14s ease;
+  }
+  .dot.on{box-shadow:0 0 0 2px var(--bg), 0 0 0 4px var(--chrome-ink);}
+  #dockCustom{
+    width:27px; height:27px; padding:0; border-radius:999px;
+    border:1px solid rgba(128,128,128,.55); background:transparent; cursor:pointer;
+  }
+  #dockCustom::-webkit-color-swatch-wrapper{padding:2px;}
+  #dockCustom::-webkit-color-swatch{border:0; border-radius:999px;}
+
+  .step{
+    min-width:32px; height:27px; padding:0 6px;
+    border-radius:9px; border:1px solid var(--chrome-edge);
+    background:transparent; color:var(--chrome-ink);
+    font-size:15px; font-weight:600; line-height:1; cursor:pointer;
+  }
+  .step.on{background:var(--chrome-ink); color:var(--bg); border-color:var(--chrome-ink);}
+  #dockSize{
+    min-width:32px; text-align:center;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:13px; color:var(--chrome-ink);
+  }
+
+  #hint{
+    position:fixed; z-index:4; left:50%;
+    bottom:calc(140px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--chrome-ink);
+    background:var(--chrome-fill);
+    border:1px solid var(--chrome-edge);
+    border-radius:999px; padding:9px 16px;
+    pointer-events:none; white-space:nowrap;
+    transition:opacity .45s ease;
+  }
+  #hint.gone{opacity:0;}
+
+  /* ---------- settings panel ---------- */
+  #scrim{
+    position:fixed; inset:0; z-index:9;
+    background:rgba(0,0,0,.55);
+    opacity:0; pointer-events:none; transition:opacity .2s ease;
+  }
+  #scrim.on{opacity:1; pointer-events:auto;}
+
+  #panel{
+    position:fixed; z-index:10; inset:auto 0 0 0;
+    background:var(--panel); color:var(--panel-ink);
+    border-top:1px solid var(--brass);
+    border-radius:20px 20px 0 0;
+    padding:0 18px calc(18px + env(safe-area-inset-bottom));
+    max-height:86vh; overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    transform:translateY(102%);
+    transition:transform .26s cubic-bezier(.32,.72,0,1);
+    box-shadow:0 -20px 50px rgba(0,0,0,.5);
+  }
+  #panel.on{transform:translateY(0);}
+
+  .grip{width:42px; height:4px; border-radius:999px; background:#3C4A4B; margin:12px auto 16px;}
+
+  .masthead{
+    display:flex; align-items:center; gap:14px;
+    padding-bottom:16px; border-bottom:1px solid var(--hairline);
+  }
+  #preview{
+    flex:0 0 auto; width:72px; height:62px;
+    border-radius:12px; border:1px solid var(--hairline);
+    display:flex; align-items:center; justify-content:center; gap:.3em;
+    overflow:hidden; font-size:26px; line-height:1;
+  }
+  .masthead h1{margin:0; font-size:17px; font-weight:640; letter-spacing:-.01em;}
+  .masthead p{margin:5px 0 0; font-size:12.5px; color:var(--panel-muted); line-height:1.4;}
+
+  .row{
+    display:grid; grid-template-columns:minmax(0,1fr) auto;
+    gap:14px; align-items:center;
+    padding:15px 0; border-bottom:1px solid var(--hairline);
+  }
+  .row.stack{grid-template-columns:1fr; gap:11px;}
+  .row:last-of-type{border-bottom:0;}
+  .row.off{opacity:.42;}
+
+  .eyebrow{
+    display:block;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:9.5px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--brass); margin-bottom:5px;
+  }
+  .label{font-size:15px; font-weight:600; letter-spacing:-.005em;}
+  .sub{display:block; margin-top:4px; font-size:12px; font-weight:400; color:var(--panel-muted); line-height:1.4;}
+  .sub.warn{color:var(--warn);}
+
+  .chips{display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end;}
+  .row.stack .chips{justify-content:flex-start;}
+  .chip{
+    border:1px solid var(--hairline); background:var(--panel-raised);
+    color:var(--panel-ink); border-radius:10px;
+    min-height:40px; padding:0 13px; font-size:13.5px; font-weight:520;
+    cursor:pointer; transition:border-color .15s ease, background .15s ease;
+  }
+  .chip.on{background:var(--brass-soft); border-color:var(--brass); color:#F3E4B4;}
+
+  .slot{
+    display:grid; grid-template-columns:auto minmax(0,1fr);
+    gap:10px; align-items:center; padding:9px 0;
+  }
+  .slot + .slot{border-top:1px dashed var(--hairline);}
+  .slot.hide{display:none;}
+  .slot-no{
+    width:26px; height:26px; border-radius:8px;
+    display:grid; place-items:center;
+    background:var(--panel-raised); border:1px solid var(--hairline);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:12px; color:var(--panel-muted);
+  }
+  .slot .chips{justify-content:flex-start;}
+  .slot .chip{min-height:36px; padding:0 11px; font-size:13px;}
+  .slot-read{
+    grid-column:2; display:flex; align-items:center; gap:7px;
+    font-size:12px; color:var(--panel-muted);
+  }
+  .slot-read i{
+    width:11px; height:11px; border-radius:999px; display:inline-block;
+    border:1px solid rgba(255,255,255,.25);
+  }
+
+  .swatch{
+    width:40px; height:40px; min-height:40px; padding:0;
+    border-radius:999px; border:1px solid var(--hairline); cursor:pointer;
+  }
+  .swatch.on{box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--brass);}
+  input[type="color"].panel-color{
+    width:40px; height:40px; padding:0; border-radius:999px;
+    border:1px solid var(--hairline); background:var(--panel-raised); cursor:pointer;
+  }
+  input[type="color"].panel-color::-webkit-color-swatch-wrapper{padding:3px;}
+  input[type="color"].panel-color::-webkit-color-swatch{border:0; border-radius:999px;}
+
+  input[type="range"]{width:100%; accent-color:var(--brass);}
+  input[type="text"], select{
+    min-height:44px; width:100%;
+    background:var(--panel-raised); color:var(--panel-ink);
+    border:1px solid var(--hairline); border-radius:10px;
+    padding:10px 12px; font-size:16px;
+  }
+  #letters{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    letter-spacing:.14em; text-transform:uppercase;
+  }
+
+  .toggle{
+    position:relative; width:52px; height:31px; flex:0 0 auto;
+    border-radius:999px; border:1px solid var(--hairline);
+    background:var(--panel-raised); cursor:pointer; padding:0;
+    transition:background .16s ease, border-color .16s ease;
+  }
+  .toggle::after{
+    content:""; position:absolute; top:3px; left:3px;
+    width:23px; height:23px; border-radius:999px; background:#7D8F8B;
+    transition:transform .16s ease, background .16s ease;
+  }
+  .toggle.on{background:var(--brass-soft); border-color:var(--brass);}
+  .toggle.on::after{transform:translateX(21px); background:var(--brass);}
+
+  #done{
+    width:100%; margin:18px 0 4px; min-height:50px;
+    border:0; border-radius:13px;
+    background:var(--brass); color:#1A1500;
+    font-size:15.5px; font-weight:700; cursor:pointer;
+  }
+
+  button:focus-visible, input:focus-visible, select:focus-visible{
+    outline:2px solid var(--brass); outline-offset:2px;
+  }
+
+  /* ---------- calibration overlay ---------- */
+  #calib{
+    position:fixed; inset:0; z-index:20;
+    display:none; flex-direction:column;
+    background:var(--calib-bg,#000);
+  }
+  #calib.on{display:flex;}
+  #calibStage{
+    flex:1; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:5vmin;
+    min-height:0;
+  }
+  #calibArt{
+    display:flex; align-items:center; justify-content:center; gap:.3em;
+    font-size:22vmin; font-weight:800; line-height:1;
+    font-family:var(--face);
+  }
+  #calibBar{
+    display:flex; width:min(74vw,420px); height:9vmin; max-height:66px;
+    border-radius:6px; overflow:hidden;
+  }
+  #calibBar span{flex:1;}
+  #calibCue{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:10px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--calib-ink,#888);
+  }
+  #calibCard{
+    background:var(--panel); color:var(--panel-ink);
+    border-top:1px solid var(--brass);
+    border-radius:20px 20px 0 0;
+    padding:16px 18px calc(16px + env(safe-area-inset-bottom));
+    max-height:66vh; overflow-y:auto;
+    box-shadow:0 -20px 50px rgba(0,0,0,.55);
+  }
+  .calib-head{display:flex; align-items:center; justify-content:space-between; gap:12px;}
+  #calibTitle{margin:6px 0 0; font-size:18px; font-weight:650;}
+  #calibChecks{margin:10px 0 0; padding:0; list-style:none;}
+  #calibChecks li{
+    display:grid; grid-template-columns:auto 1fr; gap:9px;
+    font-size:13px; line-height:1.45; color:var(--panel-muted);
+    padding:5px 0;
+  }
+  #calibChecks li b{color:var(--panel-ink); font-weight:600;}
+  #calibChecks .pip{
+    width:15px; height:15px; border-radius:999px; margin-top:2px;
+    border:1px solid rgba(255,255,255,.3);
+  }
+  .calib-slider{padding:11px 0 3px; border-top:1px solid var(--hairline); margin-top:12px;}
+  .calib-slider label{
+    display:flex; justify-content:space-between; align-items:baseline;
+    font-size:13px; font-weight:600; margin-bottom:7px;
+  }
+  .calib-slider label span{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:11px; color:var(--panel-muted); font-weight:400;
+  }
+  #calibLeak{
+    display:flex; align-items:center; gap:9px; margin-top:13px;
+    padding:10px 12px; border-radius:11px;
+    background:var(--panel-raised); border:1px solid var(--hairline);
+    font-size:12.5px; line-height:1.4; color:var(--panel-muted);
+  }
+  #calibLeak i{width:9px; height:9px; border-radius:999px; flex:0 0 auto;}
+  #calibLeak span{flex:1;}
+  #calibLeak b{color:var(--panel-ink); font-weight:650;}
+  #calibFix{min-height:34px; padding:0 11px; font-size:12.5px; flex:0 0 auto;}
+  #calibFix.hide{display:none;}
+  #calibHexes{
+    display:flex; gap:8px; align-items:center; margin-top:12px;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:11px; color:var(--panel-muted);
+  }
+  #calibHexes i{width:12px; height:12px; border-radius:999px; display:inline-block; margin-right:4px; vertical-align:-1px;}
+  .calib-nav{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap;}
+  .calib-nav .chip{flex:1; min-width:88px;}
+  .calib-nav .chip.primary{background:var(--brass); border-color:var(--brass); color:#1A1500; font-weight:700;}
+
+  @media (min-width:720px){
+    #panel{left:50%; width:min(640px,94vw); transform:translate(-50%,102%);}
+    #panel.on{transform:translate(-50%,0);}
+    #calibCard{width:min(640px,94vw); margin:0 auto;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    #panel,#scrim,#hint,#dock{transition:none;}
+  }
+</style>
+</head>
+<body>
+
+<main id="screen" aria-label="Training screen. Tap to show the next letters.">
+  <div id="row" aria-live="polite"><span class="glyph" style="color:#ff0000">E</span></div>
+</main>
+
+<div id="hud">
+  <div id="reps"><b id="repCount">001</b><span>REPS</span></div>
+  <div class="chrome-row">
+    <button id="fullBtn" class="chrome-btn" aria-label="Toggle full screen">&#9974;</button>
+    <button id="panelBtn" class="chrome-btn" aria-label="Open settings">&#9776;</button>
+  </div>
+</div>
+
+<div id="hint">Tap anywhere for the next letter</div>
+
+<div id="dock">
+  <button id="dockTab" aria-label="Hide controls" aria-expanded="true"><span class="caret">&#8964;</span></button>
+  <div id="dockBar">
+    <div class="dock-group">
+      <span class="dock-cap">Letters</span>
+      <div class="dock-set" id="dockCount">
+        <button class="step on" data-count="1">1</button>
+        <button class="step" data-count="2">2</button>
+        <button class="step" data-count="3">3</button>
+      </div>
+    </div>
+
+    <div class="dock-rule"></div>
+
+    <div class="dock-group">
+      <span class="dock-cap">Ink</span>
+      <div class="dock-set" id="dockColors">
+        <button class="dot on" data-color="#ff0000" style="background:#ff0000" aria-label="Red letters"></button>
+        <button class="dot" data-color="#00ff00" style="background:#00ff00" aria-label="Green letters"></button>
+        <button class="dot" data-color="#ffffff" style="background:#ffffff" aria-label="White letters"></button>
+        <button class="dot" data-color="#000000" style="background:#000000" aria-label="Black letters"></button>
+        <input id="dockCustom" type="color" value="#ff0000" aria-label="Custom letter color" />
+      </div>
+    </div>
+
+    <div class="dock-rule"></div>
+
+    <div class="dock-group">
+      <span class="dock-cap">Field</span>
+      <div class="dock-set" id="dockBgs">
+        <button class="dot on" data-bg="#000000" style="background:#000000" aria-label="Black background"></button>
+        <button class="dot" data-bg="#ffffff" style="background:#ffffff" aria-label="White background"></button>
+      </div>
+    </div>
+
+    <div class="dock-rule"></div>
+
+    <div class="dock-group">
+      <span class="dock-cap">Size</span>
+      <div class="dock-set">
+        <button id="sizeDown" class="step" aria-label="Smaller letters">&minus;</button>
+        <span id="dockSize">42</span>
+        <button id="sizeUp" class="step" aria-label="Bigger letters">+</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="calib" aria-hidden="true" aria-label="Color calibration">
+  <div id="calibStage">
+    <div id="calibArt"></div>
+    <div id="calibBar"></div>
+    <div id="calibCue"></div>
+  </div>
+
+  <div id="calibCard">
+    <div class="calib-head">
+      <span class="eyebrow" id="calibStep">Step 1 of 4</span>
+      <button id="calibClose" class="chip">Close</button>
+    </div>
+    <h2 id="calibTitle">Your glasses</h2>
+    <ul id="calibChecks"></ul>
+
+    <div class="chips" id="calibPairPick" style="justify-content:flex-start;margin-top:12px">
+      <button class="chip" data-pair="cyan">Red / Cyan</button>
+      <button class="chip on" data-pair="green">Red / Green</button>
+      <button class="chip" data-pair="blue">Red / Blue</button>
+    </div>
+
+    <div id="blueWrap" class="calib-slider">
+      <label>Blue let through by the second lens <span id="blueVal">0%</span></label>
+      <input id="blueRange" type="range" min="0" max="100" value="0" aria-label="Blue let through by the second lens" />
+    </div>
+
+    <div id="calibLeak"><i></i><span></span><button id="calibFix" class="chip">Clean it up</button></div>
+
+    <div id="calibTune">
+      <div class="calib-slider">
+        <label>Shade <span id="hueVal">0</span></label>
+        <input id="hueRange" type="range" min="0" max="100" value="50" aria-label="Shade" />
+      </div>
+      <div class="calib-slider">
+        <label>Brightness <span id="levVal">50</span></label>
+        <input id="levRange" type="range" min="14" max="50" value="50" aria-label="Brightness" />
+      </div>
+    </div>
+
+    <div id="calibHexes">
+      <span><i id="hexRedDot"></i><b id="hexRed">#ff0000</b></span>
+      <span><i id="hexGreenDot"></i><b id="hexGreen">#00ff00</b></span>
+      <input id="calibExact" type="color" class="panel-color" style="width:32px;height:32px;margin-left:auto" aria-label="Exact color" />
+    </div>
+
+    <div class="calib-nav">
+      <button id="calibField" class="chip">On white</button>
+      <button id="calibReset" class="chip">Standard</button>
+      <button id="calibPrev" class="chip">Back</button>
+      <button id="calibNext" class="chip primary">Next</button>
+    </div>
+  </div>
+</section>
+
+<div id="scrim"></div>
+
+<section id="panel" aria-label="Settings" aria-hidden="true">
+  <div class="grip"></div>
+
+  <div class="masthead">
+    <div id="preview"></div>
+    <div>
+      <h1>Session setup</h1>
+      <p>The square shows exactly what appears on the training screen.</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Layout</span>
+      <div class="label">Letters on screen</div>
+    </div>
+    <div class="chips" id="countChips">
+      <button class="chip on" data-count="1">1</button>
+      <button class="chip" data-count="2">2</button>
+      <button class="chip" data-count="3">3</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Targeting</span>
+      <div class="label">Ink color<span class="sub" id="modeNote">One color for every letter.</span></div>
+    </div>
+    <div class="chips" id="modeChips">
+      <button class="chip on" data-mode="single">Pick a color</button>
+      <button class="chip" data-mode="eye">By eye</button>
+    </div>
+  </div>
+
+  <div class="row" id="colorRow">
+    <div>
+      <div class="label">Letter color<span class="sub" id="colorNote">Match the lens the working eye looks through.</span></div>
+    </div>
+    <div class="chips" id="colorChips">
+      <button class="swatch on" data-color="#ff0000" style="background:#ff0000" aria-label="Red"></button>
+      <button class="swatch" data-color="#00ff00" style="background:#00ff00" aria-label="Green"></button>
+      <button class="swatch" data-color="#ffffff" style="background:#ffffff" aria-label="White"></button>
+      <button class="swatch" data-color="#000000" style="background:#000000" aria-label="Black"></button>
+      <input id="customColor" class="panel-color" type="color" value="#ff0000" aria-label="Custom color" />
+    </div>
+  </div>
+
+  <div class="row" id="calibRow">
+    <div>
+      <div class="label">Lens colors<span class="sub" id="calibReadout">Standard red and green.</span></div>
+    </div>
+    <div class="chips"><button id="calibOpen" class="chip">Calibrate</button></div>
+  </div>
+
+  <div class="row stack" id="lensRow">
+    <div>
+      <div class="label">The glasses<span class="sub">The lens pair, and which eye wears the red one.</span></div>
+    </div>
+    <div class="chips" id="pairChips">
+      <button class="chip" data-pair="cyan">Red / Cyan</button>
+      <button class="chip on" data-pair="green">Red / Green</button>
+      <button class="chip" data-pair="blue">Red / Blue</button>
+    </div>
+    <div class="chips" id="lensChips">
+      <button class="chip on" data-red="L">Red left</button>
+      <button class="chip" data-red="R">Red right</button>
+    </div>
+  </div>
+
+  <div class="row stack" id="slotRow">
+    <div>
+      <div class="label">Which eye sees each letter<span class="sub" id="slotNote">Colors are worked out from the background for you.</span></div>
+    </div>
+
+    <div class="slot" data-slot="0">
+      <div class="slot-no">1</div>
+      <div class="chips slot-chips" data-slot="0">
+        <button class="chip on" data-eye="L">Left</button>
+        <button class="chip" data-eye="R">Right</button>
+        <button class="chip" data-eye="both">Both</button>
+        <button class="chip" data-eye="rand">Random</button>
+      </div>
+      <div class="slot-read" id="read0"><i></i><span></span></div>
+    </div>
+
+    <div class="slot hide" data-slot="1">
+      <div class="slot-no">2</div>
+      <div class="chips slot-chips" data-slot="1">
+        <button class="chip" data-eye="L">Left</button>
+        <button class="chip on" data-eye="R">Right</button>
+        <button class="chip" data-eye="both">Both</button>
+        <button class="chip" data-eye="rand">Random</button>
+      </div>
+      <div class="slot-read" id="read1"><i></i><span></span></div>
+    </div>
+
+    <div class="slot hide" data-slot="2">
+      <div class="slot-no">3</div>
+      <div class="chips slot-chips" data-slot="2">
+        <button class="chip" data-eye="L">Left</button>
+        <button class="chip on" data-eye="R">Right</button>
+        <button class="chip" data-eye="both">Both</button>
+        <button class="chip" data-eye="rand">Random</button>
+      </div>
+      <div class="slot-read" id="read2"><i></i><span></span></div>
+    </div>
+  </div>
+
+  <div class="row" id="shuffleRow">
+    <div class="label">Shuffle the eyes each tap<span class="sub">Keeps the mix above, but deals it to a different letter every time.</span></div>
+    <button id="shuffleEyes" class="toggle on" role="switch" aria-checked="true" aria-label="Shuffle the eyes each tap"></button>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Field</span>
+      <div class="label">Background</div>
+    </div>
+    <div class="chips" id="bgChips">
+      <button class="chip on" data-bg="#000000">Black</button>
+      <button class="chip" data-bg="#ffffff">White</button>
+    </div>
+  </div>
+
+  <div class="row stack">
+    <div>
+      <span class="eyebrow">Acuity</span>
+      <div class="label">Letter size<span class="sub" id="sizeNote">42% of screen height</span></div>
+    </div>
+    <input id="sizeRange" type="range" min="8" max="90" step="1" value="42" aria-label="Letter size" />
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Order</span>
+      <div class="label">Sequence</div>
+    </div>
+    <div class="chips" id="orderChips">
+      <button class="chip on" data-order="random">Random</button>
+      <button class="chip" data-order="sequential">In order</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">Never repeat back to back</div>
+    <button id="noRepeat" class="toggle on" role="switch" aria-checked="true" aria-label="Never repeat back to back"></button>
+  </div>
+
+  <div class="row stack">
+    <div>
+      <span class="eyebrow">Chart</span>
+      <div class="label">Letters in rotation<span class="sub">Type your own, or start from a preset.</span></div>
+    </div>
+    <div class="chips" id="presetChips">
+      <button class="chip on" data-letters="EFPTOZLD" data-rotate="0">Snellen</button>
+      <button class="chip" data-letters="CDHKNORSVZ" data-rotate="0">Sloan</button>
+      <button class="chip" data-letters="E" data-rotate="1">Tumbling E</button>
+      <button class="chip" data-letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ" data-rotate="0">A&ndash;Z</button>
+      <button class="chip" data-letters="0123456789" data-rotate="0">0&ndash;9</button>
+      <button class="chip" data-letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" data-rotate="0">A&ndash;Z + 0&ndash;9</button>
+    </div>
+    <input id="letters" type="text" value="EFPTOZLD" maxlength="36" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-label="Letters in rotation" />
+  </div>
+
+  <div class="row">
+    <div class="label">Random rotation<span class="sub">Turns each letter a quarter turn at a time.</span></div>
+    <button id="rotate" class="toggle" role="switch" aria-checked="false" aria-label="Random rotation"></button>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Pacing</span>
+      <div class="label">Advance on its own</div>
+    </div>
+    <div class="chips" id="autoChips">
+      <button class="chip on" data-auto="0">Off</button>
+      <button class="chip" data-auto="1000">1s</button>
+      <button class="chip" data-auto="2000">2s</button>
+      <button class="chip" data-auto="3000">3s</button>
+      <button class="chip" data-auto="5000">5s</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Type</span>
+      <div class="label">Letterform</div>
+    </div>
+    <div class="chips" id="faceChips">
+      <button class="chip on" data-face="sans">Sans</button>
+      <button class="chip" data-face="serif">Serif</button>
+      <button class="chip" data-face="mono">Mono</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">Stroke weight</div>
+    <div class="chips" id="weightChips">
+      <button class="chip" data-weight="400">Light</button>
+      <button class="chip on" data-weight="700">Bold</button>
+      <button class="chip" data-weight="900">Heavy</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">Bottom control bar</div>
+    <button id="dockShow" class="toggle on" role="switch" aria-checked="true" aria-label="Bottom control bar"></button>
+  </div>
+
+  <div class="row">
+    <div class="label">Buzz on each letter</div>
+    <button id="haptics" class="toggle on" role="switch" aria-checked="true" aria-label="Buzz on each letter"></button>
+  </div>
+
+  <div class="row">
+    <div class="label">Rep counter<span class="sub" id="repNote">1 screen shown this session.</span></div>
+    <button id="resetReps" class="chip">Reset</button>
+  </div>
+
+  <button id="done">Start training</button>
+</section>
+
+<script>
+(function(){
+  "use strict";
+
+  const root = document.documentElement;
+  const $ = id => document.getElementById(id);
+
+  const screenEl = $('screen'), rowEl = $('row'), hint = $('hint');
+  const repCount = $('repCount'), repNote = $('repNote');
+  const panel = $('panel'), scrim = $('scrim'), preview = $('preview');
+  const lettersInput = $('letters'), sizeRange = $('sizeRange');
+  const sizeNote = $('sizeNote'), colorNote = $('colorNote'), modeNote = $('modeNote');
+  const customColor = $('customColor'), dockCustom = $('dockCustom');
+  const dock = $('dock'), dockSize = $('dockSize');
+
+  const FACES = {
+    sans:'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+    serif:'Georgia, "Times New Roman", serif',
+    mono:'ui-monospace, "SF Mono", Menlo, Consolas, monospace'
+  };
+
+  const state = {
+    fg:'#ff0000', bg:'#000000', size:42, count:1,
+    red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0,
+    mode:'single', redSide:'L', slots:['L','R','R'],
+    order:'random', noRepeat:true, rotate:false, shuffle:true,
+    autoMs:0, haptics:true, dockOn:true,
+    reps:1, index:0, last:'E', glyphs:['E'], eyes:['L']
+  };
+
+  let timer = null;
+
+  /* ---------- anaglyph optics ----------
+     Black field: a letter is seen only through the lens of its own color.
+     White field: the letter goes dark under the OPPOSITE lens, so the
+     colors swap. This works that out so an L/R plan holds on either
+     background. */
+  function inkFor(eye, bgOverride){
+    const onWhite = (bgOverride || state.bg).toLowerCase() === '#ffffff';
+    if (eye === 'both') return onWhite ? '#000000' : '#ffffff';
+    const lensIsRed = (eye === state.redSide);
+    if (onWhite) return lensIsRed ? state.green : state.red;
+    return lensIsRed ? state.red : state.green;
+  }
+
+  function eyeName(eye){
+    if (eye === 'both') return 'Both eyes';
+    return eye === 'L' ? 'Left eye' : 'Right eye';
+  }
+
+  function inkName(hex){
+    const h = hex.toLowerCase();
+    if (h === state.red.toLowerCase()) return 'red';
+    if (h === state.green.toLowerCase()) return LENS[state.pair].name;
+    if (h === '#ffffff') return 'white';
+    if (h === '#000000') return 'black';
+    return 'custom';
+  }
+
+  function resolveEye(slot){
+    const pick = state.slots[slot];
+    return pick === 'rand' ? (Math.random() < .5 ? 'L' : 'R') : pick;
+  }
+
+  /* Keeps the mix you set (say one left, two right) but deals it to a
+     different letter each time, so the viewer cannot predict which
+     letter belongs to which eye. */
+  function rollEyes(){
+    const eyes = [];
+    for (let i = 0; i < state.count; i++) eyes.push(resolveEye(i));
+    if (state.shuffle && state.count > 1){
+      for (let i = eyes.length - 1; i > 0; i--){
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = eyes[i]; eyes[i] = eyes[j]; eyes[j] = t;
+      }
+    }
+    return eyes;
+  }
+
+  /* ---------- drawing ---------- */
+  function pool(){
+    const raw = lettersInput.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+    const uniq = [...new Set(raw.split(''))];
+    return uniq.length ? uniq : ['E'];
+  }
+
+  function pickGlyphs(){
+    const set = pool(), out = [];
+    for (let i = 0; i < state.count; i++){
+      let next, guard = 0;
+      if (state.order === 'sequential'){
+        state.index = (state.index + 1) % set.length;
+        next = set[state.index];
+      } else {
+        do { next = set[Math.floor(Math.random() * set.length)]; guard++; }
+        while (guard < 40 && (
+          (out.includes(next) && set.length > state.count) ||
+          (state.noRepeat && state.count === 1 && next === state.last)
+        ));
+      }
+      out.push(next);
+    }
+    if (state.noRepeat && state.count > 1 && out.join('') === state.last && set.length > state.count){
+      return pickGlyphs();
+    }
+    return out;
+  }
+
+  function render(){
+    rowEl.innerHTML = '';
+    root.style.setProperty('--count', state.count);
+    state.glyphs.forEach((ch, i) => {
+      const span = document.createElement('span');
+      span.className = 'glyph';
+      span.textContent = ch;
+      span.style.color = state.mode === 'eye' ? inkFor(state.eyes[i]) : state.fg;
+      span.style.setProperty('--rot', state.rotate ? (Math.floor(Math.random()*4) * 90) + 'deg' : '0deg');
+      rowEl.appendChild(span);
+    });
+    paintPreview();
+  }
+
+  function advance(){
+    state.glyphs = pickGlyphs();
+    state.eyes = rollEyes();
+    state.last = state.glyphs.join('');
+    render();
+    state.reps += 1;
+    paintReps();
+    hint.classList.add('gone');
+    if (state.haptics && navigator.vibrate) navigator.vibrate(8);
+    restartTimer();
+  }
+
+  function paintReps(){
+    repCount.textContent = String(state.reps).padStart(3,'0');
+    repNote.textContent = state.reps === 1 ? '1 screen shown this session.'
+                                           : state.reps + ' screens shown this session.';
+  }
+
+  function restartTimer(){
+    clearInterval(timer); timer = null;
+    if (state.autoMs > 0 && !panel.classList.contains('on') && !calib.classList.contains('on')){
+      timer = setInterval(advance, state.autoMs);
+    }
+  }
+
+  /* ---------- panel readouts ---------- */
+  function paintPreview(){
+    preview.style.background = state.bg;
+    preview.style.fontFamily = getComputedStyle(rowEl).fontFamily;
+    preview.style.fontWeight = getComputedStyle(rowEl).fontWeight;
+    preview.innerHTML = '';
+    state.glyphs.forEach((ch, i) => {
+      const s = document.createElement('span');
+      s.textContent = ch;
+      s.style.color = state.mode === 'eye' ? inkFor(state.eyes[i]) : state.fg;
+      s.style.fontSize = state.count === 3 ? '19px' : (state.count === 2 ? '24px' : '30px');
+      preview.appendChild(s);
+    });
+  }
+
+  function paintSlots(){
+    document.querySelectorAll('.slot').forEach((el, i) => {
+      el.classList.toggle('hide', i >= state.count);
+      const read = $('read' + i);
+      const pick = state.slots[i];
+      if (pick === 'rand'){
+        read.querySelector('i').style.background =
+          'linear-gradient(90deg,' + inkFor('L') + ' 50%,' + inkFor('R') + ' 50%)';
+        read.querySelector('span').textContent = 'Left or right, decided each tap';
+      } else {
+        const ink = inkFor(pick);
+        read.querySelector('i').style.background = ink;
+        read.querySelector('span').textContent = eyeName(pick) + ' \u00b7 draws in ' + inkName(ink);
+      }
+    });
+
+    const byEye = state.mode === 'eye';
+    const shuffling = byEye && state.shuffle && state.count > 1;
+    $('slotNote').textContent = shuffling
+      ? 'Set the mix here. Positions on screen are shuffled every tap.'
+      : 'Colors are worked out from the background for you.';
+    $('shuffleRow').classList.toggle('off', !byEye || state.count === 1);
+    $('slotRow').classList.toggle('off', !byEye);
+    $('lensRow').classList.toggle('off', !byEye);
+    $('colorRow').classList.toggle('off', byEye);
+    modeNote.textContent = byEye
+      ? 'Each letter is colored so only the chosen eye can see it.'
+      : 'One color for every letter.';
+  }
+
+  function paint(){
+    root.style.setProperty('--fg', state.fg);
+    root.style.setProperty('--bg', state.bg);
+    document.querySelector('meta[name="theme-color"]').setAttribute('content', state.bg);
+
+    const light = state.bg.toLowerCase() === '#ffffff';
+    root.style.setProperty('--chrome-ink', light ? '#101010' : '#ffffff');
+    root.style.setProperty('--chrome-fill', light ? 'rgba(255,255,255,.62)' : 'rgba(0,0,0,.42)');
+    root.style.setProperty('--chrome-edge', light ? 'rgba(0,0,0,.18)' : 'rgba(255,255,255,.22)');
+
+    const clash = state.mode === 'single' && state.fg.toLowerCase() === state.bg.toLowerCase();
+    colorNote.textContent = clash
+      ? 'Letter and background match, so nothing will show. Pick another color.'
+      : 'Match the lens the working eye looks through.';
+    colorNote.classList.toggle('warn', clash);
+
+    render();
+    paintSlots();
+  }
+
+  /* ---------- setters shared by dock and panel ---------- */
+  function mark(sel, attr, value){
+    document.querySelectorAll(sel).forEach(b => b.classList.toggle('on', b.dataset[attr] === value));
+  }
+
+  function setMode(mode){
+    state.mode = mode;
+    mark('#modeChips .chip', 'mode', mode);
+    paint();
+  }
+
+  function setColor(hex, fromPicker){
+    state.fg = hex;
+    customColor.value = hex; dockCustom.value = hex;
+    if (fromPicker){
+      document.querySelectorAll('#colorChips .swatch, #dockColors .dot').forEach(b => b.classList.remove('on'));
+    } else {
+      mark('#colorChips .swatch', 'color', hex);
+      mark('#dockColors .dot', 'color', hex);
+    }
+    setMode('single');
+  }
+
+  function setBg(hex){
+    state.bg = hex;
+    mark('#bgChips .chip', 'bg', hex);
+    mark('#dockBgs .dot', 'bg', hex);
+    paint();
+  }
+
+  function setCount(n){
+    const first = state.count;
+    state.count = n;
+    mark('#countChips .chip', 'count', String(n));
+    mark('#dockCount .step', 'count', String(n));
+    if (n > 1 && first === 1 && state.mode === 'single') state.mode = 'eye';
+    mark('#modeChips .chip', 'mode', state.mode);
+    state.glyphs = pickGlyphs();
+    state.eyes = rollEyes();
+    state.last = state.glyphs.join('');
+    paint();
+  }
+
+  function setSize(n){
+    state.size = Math.min(90, Math.max(8, Math.round(n)));
+    root.style.setProperty('--size', state.size);
+    sizeRange.value = state.size;
+    dockSize.textContent = state.size;
+    sizeNote.textContent = state.size + '% of screen height';
+  }
+
+  /* ---------- wiring ---------- */
+  function group(containerId, handler, skipMark){
+    const box = $(containerId);
+    box.addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (!btn || !box.contains(btn)) return;
+      if (!skipMark) [...box.querySelectorAll('button')].forEach(b => b.classList.toggle('on', b === btn));
+      handler(btn);
+      if (!skipMark) paint();
+    });
+  }
+
+  function toggle(id, key, after){
+    const btn = $(id);
+    btn.addEventListener('click', () => {
+      state[key] = !state[key];
+      btn.classList.toggle('on', state[key]);
+      btn.setAttribute('aria-checked', String(state[key]));
+      if (after) after();
+    });
+  }
+
+  group('colorChips', btn => setColor(btn.dataset.color, false), true);
+  group('dockColors', btn => setColor(btn.dataset.color, false), true);
+  group('bgChips',    btn => setBg(btn.dataset.bg), true);
+  group('dockBgs',    btn => setBg(btn.dataset.bg), true);
+  group('countChips', btn => setCount(Number(btn.dataset.count)), true);
+  group('dockCount',  btn => setCount(Number(btn.dataset.count)), true);
+  group('modeChips',  btn => setMode(btn.dataset.mode), true);
+  group('lensChips',  btn => { state.redSide = btn.dataset.red; paint(); }, true);
+
+  customColor.addEventListener('input', () => setColor(customColor.value, true));
+  dockCustom.addEventListener('input', () => setColor(dockCustom.value, true));
+
+  document.querySelectorAll('.slot-chips').forEach(box => {
+    box.addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      [...box.querySelectorAll('button')].forEach(b => b.classList.toggle('on', b === btn));
+      const i = Number(box.dataset.slot);
+      state.slots[i] = btn.dataset.eye;
+      state.eyes = rollEyes();
+      if (state.mode !== 'eye') setMode('eye'); else paint();
+    });
+  });
+
+  group('orderChips', btn => { state.order = btn.dataset.order; state.index = 0; });
+  group('autoChips',  btn => { state.autoMs = Number(btn.dataset.auto); restartTimer(); });
+  group('faceChips',  btn => { root.style.setProperty('--face', FACES[btn.dataset.face]); });
+  group('weightChips',btn => { root.style.setProperty('--weight', btn.dataset.weight); });
+
+  group('presetChips', btn => {
+    lettersInput.value = btn.dataset.letters;
+    state.index = 0;
+    const wantsRotation = btn.dataset.rotate === '1';
+    state.rotate = wantsRotation;
+    $('rotate').classList.toggle('on', wantsRotation);
+    $('rotate').setAttribute('aria-checked', String(wantsRotation));
+    state.glyphs = pickGlyphs();
+    state.eyes = rollEyes();
+    state.last = state.glyphs.join('');
+  });
+
+  toggle('noRepeat','noRepeat');
+  toggle('rotate','rotate', render);
+  toggle('shuffleEyes','shuffle', () => { state.eyes = rollEyes(); paint(); });
+  toggle('haptics','haptics');
+  toggle('dockShow','dockOn', () => { dock.style.display = state.dockOn ? '' : 'none'; });
+
+  lettersInput.addEventListener('input', () => {
+    const clean = lettersInput.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if (clean !== lettersInput.value) lettersInput.value = clean;
+    state.index = 0;
+    document.querySelectorAll('#presetChips .chip').forEach(b => {
+      b.classList.toggle('on', b.dataset.letters === clean);
+    });
+  });
+
+  sizeRange.addEventListener('input', () => setSize(Number(sizeRange.value)));
+  $('sizeUp').addEventListener('click',   () => setSize(state.size + 4));
+  $('sizeDown').addEventListener('click', () => setSize(state.size - 4));
+
+  $('dockTab').addEventListener('click', () => {
+    const shut = dock.classList.toggle('shut');
+    $('dockTab').setAttribute('aria-expanded', String(!shut));
+    $('dockTab').setAttribute('aria-label', shut ? 'Show controls' : 'Hide controls');
+  });
+
+  $('resetReps').addEventListener('click', () => { state.reps = 1; state.index = 0; paintReps(); });
+
+  function openPanel(){
+    panel.classList.add('on'); scrim.classList.add('on');
+    panel.setAttribute('aria-hidden','false');
+    paint(); restartTimer();
+  }
+  function closePanel(){
+    panel.classList.remove('on'); scrim.classList.remove('on');
+    panel.setAttribute('aria-hidden','true');
+    restartTimer();
+  }
+  $('panelBtn').addEventListener('click', openPanel);
+  $('done').addEventListener('click', closePanel);
+  scrim.addEventListener('click', closePanel);
+
+  screenEl.addEventListener('pointerup', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    advance();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (calib.classList.contains('on')){
+      if (e.key === 'Escape') closeCalib();
+      return;
+    }
+    if (panel.classList.contains('on')){
+      if (e.key === 'Escape') closePanel();
+      return;
+    }
+    if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowRight' || e.key === 'ArrowDown'){
+      e.preventDefault(); advance();
+    }
+    if (e.key === '+' || e.key === '=') setSize(state.size + 4);
+    if (e.key === '-' || e.key === '_') setSize(state.size - 4);
+    if (e.key === '1' || e.key === '2' || e.key === '3') setCount(Number(e.key));
+    if (e.key.toLowerCase() === 's') openPanel();
+  });
+
+  $('fullBtn').addEventListener('click', () => {
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen){
+      document.documentElement.requestFullscreen().catch(()=>{});
+    } else if (document.exitFullscreen){
+      document.exitFullscreen().catch(()=>{});
+    }
+  });
+
+  let wakeLock = null;
+  async function keepAwake(){
+    try{ if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch(_){}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible'){ keepAwake(); restartTimer(); }
+    else clearInterval(timer);
+  });
+
+  /* ---------- calibration ----------
+     Lens tints vary by brand. Each ink has to be bright through its own
+     lens and gone through the other, so the app measures the crosstalk
+     rather than leaving it to guesswork. */
+  const calib = $('calib'), calibArt = $('calibArt'), calibBar = $('calibBar');
+  const calibChecks = $('calibChecks'), calibCue = $('calibCue');
+  const hueRange = $('hueRange'), levRange = $('levRange');
+  const hueVal = $('hueVal'), levVal = $('levVal'), calibExact = $('calibExact');
+
+  /* Which light each lens lets through. A cyan lens passes green AND blue,
+     which is why a cyan-tuned ink behaves differently from a green one. */
+  const LENS = {
+    cyan: { name:'cyan',  hue:180, g:1, b:1 },
+    green:{ name:'green', hue:120, g:1, b:0 },
+    blue: { name:'blue',  hue:225, g:0, b:1 }
+  };
+  /* Real lenses sit between the labels: a 'green' lens usually passes some
+     blue too, which is why a pure green ink can still ghost. */
+  function weights(lensKey){
+    if (lensKey === 'red') return [1, 0, 0];
+    return [0, LENS[state.pair].g, state.pair === 'blue' ? 1 : state.bluePass];
+  }
+
+  const STEPS = ['glasses','red','other','pair'];
+  let step = 0, calibBg = '#000000';
+
+  function otherLens(){ return LENS[state.pair]; }
+  function otherName(){ return otherLens().name; }
+
+  function hslToHex(h, s, l){
+    h = (h % 360 + 360) % 360; s /= 100; l /= 100;
+    const a = s * Math.min(l, 1 - l);
+    const k = n => (n + h / 30) % 12;
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    const hx = x => Math.round(255 * x).toString(16).padStart(2, '0');
+    return '#' + hx(f(0)) + hx(f(8)) + hx(f(4));
+  }
+
+  function hexToHsl(hex){
+    const n = parseInt(hex.slice(1), 16);
+    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    const mx = Math.max(r,g,b), mn = Math.min(r,g,b), d = mx - mn;
+    let h = 0;
+    if (d){
+      if (mx === r) h = ((g - b) / d) % 6;
+      else if (mx === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+    }
+    const l = (mx + mn) / 2;
+    return { h:(h + 360) % 360, s:(d ? d / (1 - Math.abs(2*l - 1)) : 0) * 100, l:l * 100 };
+  }
+
+  function rgbOf(hex){
+    const n = parseInt(hex.slice(1), 16);
+    return { r:(n >> 16) & 255, g:(n >> 8) & 255, b:n & 255 };
+  }
+
+  /* How much of this ink survives a given lens, 0 to 255. */
+  function through(lensKey, hex){
+    const c = rgbOf(hex), w = weights(lensKey);
+    const sum = w[0] + w[1] + w[2];
+    return sum ? (c.r * w[0] + c.g * w[1] + c.b * w[2]) / sum : 0;
+  }
+
+  /* What an eye actually notices is contrast against the field, not
+     brightness. On black a letter shows by being bright; on white it shows
+     by being dark. One formula covers both. */
+  function visible(lensKey, hex){
+    return Math.abs(through(lensKey, hex) - through(lensKey, calibBg)) / 255;
+  }
+
+  function reading(key){
+    const hex = state[key === 'red' ? 'red' : 'green'];
+    const ownLens   = key === 'red' ? 'red' : state.pair;
+    const wrongLens = key === 'red' ? state.pair : 'red';
+    const own = visible(ownLens, hex), wrong = visible(wrongLens, hex);
+    return { own:own, wrong:wrong, ghost: own ? Math.min(1, wrong / own) : 1 };
+  }
+
+  /* Push the wrong lens's channels all the way to the field, so that eye
+     sees nothing, and drive the ink's own channel to full contrast. */
+  function purify(key){
+    const onWhite = calibBg.toLowerCase() === '#ffffff';
+    const hex = state[key === 'red' ? 'red' : 'green'];
+    const c = rgbOf(hex);
+    const hide = onWhite ? 255 : 0;
+    const hx = v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2,'0');
+    if (key === 'red'){
+      const lvl = onWhite ? Math.min(c.r, 90) : Math.max(c.r, 165);
+      return '#' + hx(lvl) + hx(hide) + hx(hide);
+    }
+    const w = weights(state.pair);
+    const lvl = onWhite ? Math.min(through(state.pair, hex), 90) : Math.max(through(state.pair, hex), 165);
+    return '#' + hx(hide) + hx(w[1] ? lvl : hide) + hx(w[2] ? lvl : hide);
+  }
+
+  function hueSpan(key){
+    if (key === 'red') return [-26, 26];
+    const h = otherLens().hue;
+    return [h - 32, h + 32];
+  }
+
+  function activeKey(){ return STEPS[step] === 'red' ? 'red' : 'green'; }
+
+  function setPair(key, seedInk){
+    state.pair = key;
+    state.bluePass = LENS[key].b;
+    $('blueRange').value = Math.round(state.bluePass * 100);
+    $('blueVal').textContent = Math.round(state.bluePass * 100) + '%';
+    mark('#pairChips .chip', 'pair', key);
+    mark('#calibPairPick .chip', 'pair', key);
+    if (seedInk) state.green = defaultOther();
+    refreshInkSwatches();
+  }
+
+  /* Best second ink on a black field: full in every channel the lens passes. */
+  function defaultOther(){
+    const w = weights(state.pair);
+    const hx = v => v.toString(16).padStart(2,'0');
+    return '#00' + hx(w[1] ? 255 : 0) + hx(w[2] > 0.15 ? 255 : 0);
+  }
+
+  function bullet(color, html){
+    const li = document.createElement('li');
+    const pip = document.createElement('i');
+    pip.className = 'pip'; pip.style.background = color;
+    const body = document.createElement('div');
+    body.innerHTML = html;
+    li.appendChild(pip); li.appendChild(body);
+    calibChecks.appendChild(li);
+  }
+
+  function paintCalib(){
+    const kind = STEPS[step];
+    const onWhite = calibBg.toLowerCase() === '#ffffff';
+    calib.style.setProperty('--calib-bg', calibBg);
+    calib.style.setProperty('--calib-ink', onWhite ? '#999' : '#777');
+
+    $('calibField').textContent = onWhite ? 'On black' : 'On white';
+    $('calibStep').textContent = 'Step ' + (step + 1) + ' of 4';
+    $('calibNext').textContent = kind === 'pair' ? 'Done' : 'Next';
+    $('calibPrev').style.visibility = step === 0 ? 'hidden' : 'visible';
+    $('calibPairPick').style.display = kind === 'glasses' ? 'flex' : 'none';
+    $('blueWrap').style.display = (kind === 'glasses' && state.pair !== 'blue') ? '' : 'none';
+    $('calibTune').style.display = (kind === 'red' || kind === 'other') ? '' : 'none';
+    $('calibLeak').style.display = (kind === 'red' || kind === 'other') ? 'flex' : 'none';
+
+    calibArt.innerHTML = ''; calibBar.innerHTML = ''; calibChecks.innerHTML = '';
+
+    if (kind === 'glasses'){
+      $('calibTitle').textContent = 'Your glasses';
+      calibCue.textContent = 'Red / ' + otherName();
+      [state.red, state.green].forEach(ink => {
+        const b = document.createElement('span');
+        b.style.background = ink; calibBar.appendChild(b);
+      });
+      bullet(state.red, 'Hold the glasses to a white wall and match the second lens. Film glasses are usually <b>red / cyan</b>, therapy pairs <b>red / green</b>.');
+      bullet(state.green, 'If a pure green ink still ghosts, the lens is passing blue as well. Raise the slider until the ghost readings match what you actually see.');
+    }
+
+    else if (kind === 'red' || kind === 'other'){
+      const key = activeKey();
+      const ink = state[key];
+      const mine = key === 'red' ? 'red' : otherName();
+      const theirs = key === 'red' ? otherName() : 'red';
+      $('calibTitle').textContent = key === 'red' ? 'Red ink' : (otherName()[0].toUpperCase() + otherName().slice(1) + ' ink');
+      calibCue.textContent = (onWhite ? 'White field' : 'Black field') + ' · ' + ink;
+
+      const g = document.createElement('span');
+      g.textContent = 'E'; g.style.color = ink; calibArt.appendChild(g);
+      const bar = document.createElement('span');
+      bar.style.background = ink; calibBar.appendChild(bar);
+
+      bullet(ink, 'Through the <b>' + mine + '</b> lens, with the other eye covered, this should stand out sharply against the field.');
+      bullet(state[key === 'red' ? 'green' : 'red'],
+             'Through the <b>' + theirs + '</b> lens it should disappear into the background.');
+
+      const hsl = hexToHsl(ink);
+      const span = hueSpan(key);
+      let h = hsl.h; if (key === 'red' && h > 180) h -= 360;
+      h = Math.min(span[1], Math.max(span[0], h));
+      hueRange.value = Math.round((h - span[0]) / (span[1] - span[0]) * 100);
+      levRange.value = Math.round(Math.min(50, Math.max(14, hsl.l)));
+      hueVal.textContent = Math.round(h) + '°';
+      levVal.textContent = levRange.value + '%';
+      calibExact.value = ink;
+      paintLeak(key);
+    }
+
+    else {
+      $('calibTitle').textContent = 'Check the pair';
+      calibCue.textContent = onWhite ? 'White field' : 'Black field';
+      ['L','R'].forEach(eye => {
+        const g = document.createElement('span');
+        g.textContent = eye === 'L' ? 'A' : 'B';
+        g.style.color = inkFor(eye, calibBg);
+        calibArt.appendChild(g);
+        const b = document.createElement('span');
+        b.style.background = inkFor(eye, calibBg);
+        calibBar.appendChild(b);
+      });
+      bullet(inkFor('L', calibBg), 'Your <b>left</b> eye should see A and not B.');
+      bullet(inkFor('R', calibBg), 'Your <b>right</b> eye should see B and not A.');
+    }
+
+    $('hexRed').textContent = state.red;
+    $('hexGreen').textContent = state.green;
+    $('hexRedDot').style.background = state.red;
+    $('hexGreenDot').style.background = state.green;
+  }
+
+  function paintLeak(key){
+    const r = reading(key);
+    const pct = Math.round(r.ghost * 100);
+    const wrong = key === 'red' ? otherName() : 'red';
+    const mine  = key === 'red' ? 'red' : otherName();
+    const dot = $('calibLeak').querySelector('i');
+    const txt = $('calibLeak').querySelector('span');
+    const fix = $('calibFix');
+    fix.classList.remove('hide');
+
+    if (r.own < 0.3){
+      dot.style.background = '#E4784A';
+      txt.innerHTML = '<b>Too faint.</b> Even the ' + mine + '-lens eye can barely pick this out of the background. ' +
+                      'Colors in this region fade for both eyes at once.';
+    } else if (pct <= 6){
+      dot.style.background = '#5FBF7F';
+      txt.innerHTML = '<b>Clean.</b> Strong for the ' + mine + '-lens eye, invisible to the ' + wrong + '-lens eye.';
+      fix.classList.add('hide');
+    } else if (pct <= 20){
+      dot.style.background = '#D8B14A';
+      txt.innerHTML = '<b>' + pct + '% ghosting.</b> A faint copy reaches the ' + wrong + '-lens eye.';
+    } else {
+      dot.style.background = '#E4784A';
+      txt.innerHTML = '<b>' + pct + '% ghosting.</b> The ' + wrong + '-lens eye can still read this, so the exercise will not work.';
+    }
+  }
+
+  function applyInk(hex){
+    state[activeKey()] = hex;
+    refreshInkSwatches();
+    paintCalib();
+  }
+
+  function refreshInkSwatches(){
+    const standard = state.red.toLowerCase() === '#ff0000' && state.green.toLowerCase() === '#00ff00';
+    $('calibReadout').textContent = standard
+      ? 'Standard red and green.'
+      : 'Tuned · red ' + state.red + ' · ' + otherName() + ' ' + state.green;
+
+    [['Red','Red letters','red'], ['Green','Green letters','green']].forEach(([panelLabel, dockLabel, key]) => {
+      document.querySelectorAll('#colorChips [aria-label="' + panelLabel + '"], #dockColors [aria-label="' + dockLabel + '"]')
+        .forEach(btn => {
+          const was = btn.dataset.color;
+          btn.dataset.color = state[key];
+          btn.style.background = state[key];
+          if (state.fg === was) state.fg = state[key];
+        });
+    });
+    paint();
+  }
+
+  function readSliders(){
+    const key = activeKey(), span = hueSpan(key);
+    const h = span[0] + (hueRange.value / 100) * (span[1] - span[0]);
+    hueVal.textContent = Math.round(h) + '°';
+    levVal.textContent = levRange.value + '%';
+    applyInk(hslToHex(h, 100, Number(levRange.value)));
+  }
+  hueRange.addEventListener('input', readSliders);
+  levRange.addEventListener('input', readSliders);
+  calibExact.addEventListener('input', () => applyInk(calibExact.value));
+  $('calibFix').addEventListener('click', () => applyInk(purify(activeKey())));
+
+  group('pairChips', btn => setPair(btn.dataset.pair, true), true);
+  group('calibPairPick', btn => { setPair(btn.dataset.pair, true); paintCalib(); }, true);
+
+  $('calibField').addEventListener('click', () => {
+    calibBg = calibBg.toLowerCase() === '#ffffff' ? '#000000' : '#ffffff';
+    paintCalib();
+  });
+
+  $('blueRange').addEventListener('input', () => {
+    state.bluePass = Number($('blueRange').value) / 100;
+    $('blueVal').textContent = $('blueRange').value + '%';
+    state.green = defaultOther();
+    refreshInkSwatches(); paintCalib();
+  });
+
+  $('calibReset').addEventListener('click', () => {
+    state.red = '#ff0000';
+    state.green = defaultOther();
+    refreshInkSwatches(); paintCalib();
+  });
+
+  $('calibNext').addEventListener('click', () => {
+    if (STEPS[step] === 'pair') { closeCalib(); return; }
+    step += 1; paintCalib();
+  });
+  $('calibPrev').addEventListener('click', () => { step = Math.max(0, step - 1); paintCalib(); });
+
+  function openCalib(){
+    step = 0; calibBg = state.bg;
+    calib.classList.add('on');
+    calib.setAttribute('aria-hidden','false');
+    closePanel();
+    clearInterval(timer);
+    paintCalib();
+  }
+  function closeCalib(){
+    calib.classList.remove('on');
+    calib.setAttribute('aria-hidden','true');
+    paint(); restartTimer();
+  }
+  $('calibOpen').addEventListener('click', openCalib);
+  $('calibClose').addEventListener('click', closeCalib);
+
+  keepAwake();
+  setSize(42);
+  setPair(state.pair, false);
+  paint();
+  paintReps();
+  setTimeout(() => hint.classList.add('gone'), 6000);
+})();
+</script>
+</body>
+</html>
