@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-<meta name="theme-color" content="#000000" />
+<meta name="theme-color" content="#ffffff" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
 <title>Anaglyph Letter Trainer</title>
 <style>
   :root{
-    --bg:#000000;
+    --bg:#ffffff;
     --fg:#ff0000;
     --size:42;
     --count:1;
@@ -446,8 +446,8 @@
     <div class="dock-group">
       <span class="dock-cap">Field</span>
       <div class="dock-set" id="dockBgs">
-        <button class="dot on" data-bg="#000000" style="background:#000000" aria-label="Black background"></button>
-        <button class="dot" data-bg="#ffffff" style="background:#ffffff" aria-label="White background"></button>
+        <button class="dot" data-bg="#000000" style="background:#000000" aria-label="Black background"></button>
+        <button class="dot on" data-bg="#ffffff" style="background:#ffffff" aria-label="White background"></button>
       </div>
     </div>
 
@@ -644,8 +644,8 @@
       <div class="label">Background</div>
     </div>
     <div class="chips" id="bgChips">
-      <button class="chip on" data-bg="#000000">Black</button>
-      <button class="chip" data-bg="#ffffff">White</button>
+      <button class="chip" data-bg="#000000">Black</button>
+      <button class="chip on" data-bg="#ffffff">White</button>
     </div>
   </div>
 
@@ -769,7 +769,7 @@
   };
 
   const state = {
-    fg:'#ff0000', bg:'#000000', size:42, count:1,
+    fg:'#ff0000', bg:'#ffffff', size:42, count:1,
     red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0, redBlue:0,
     mode:'single', redSide:'L', slots:['L','R','R'],
     order:'random', noRepeat:true, rotate:false, shuffle:true,
@@ -1181,7 +1181,7 @@
   }
 
   const STEPS = ['glasses','red','other','pair'];
-  let step = 0, calibBg = '#000000';
+  let step = 0, calibBg = '#ffffff';
 
   function otherLens(){ return LENS[state.pair]; }
   function otherName(){ return otherLens().name; }

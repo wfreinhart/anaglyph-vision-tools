@@ -144,7 +144,7 @@
     color:var(--chrome-ink);
     background:var(--chrome-fill);
     border:1px solid var(--chrome-edge);
-    border-radius:999px; padding:7px 14px;
+    border-radius:999px; padding:8px 14px;
     backdrop-filter:blur(12px);
   }
   #pips{display:flex; gap:5px;}
@@ -155,11 +155,13 @@
   #pips i.lit{background:var(--chrome-ink); opacity:1;}
   #hitCount{
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
-    font-size:14px; font-weight:600; letter-spacing:.04em;
+    font-size:15px; font-weight:600; letter-spacing:.04em;
   }
-  #eyeTag{
+  /* Same scale as the letter trainer's rep counter, so the two apps read as
+     one product. */
+  #tally .cap, #eyeTag{
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
-    font-size:10px; letter-spacing:.18em; opacity:.7;
+    font-size:9.5px; letter-spacing:.22em; opacity:.62;
   }
   #eyeTag.hide{display:none;}
 
@@ -186,7 +188,7 @@
     border:1px solid var(--chrome-edge);
     background:var(--chrome-fill);
     color:var(--chrome-ink);
-    border-radius:999px; font-size:17px;
+    border-radius:999px; font-size:19px;
     backdrop-filter:blur(12px); cursor:pointer;
     position:relative; overflow:hidden;
   }
@@ -196,6 +198,59 @@
     transform:scaleX(0); transform-origin:left;
   }
   #gear.arming::after{transform:scaleX(1); transition:transform .6s linear;}
+
+  /* ---------- bottom control dock ----------
+     Lifted from the letter trainer so the two apps share one idiom. Hidden
+     whenever the gear is childproofed: a dock is exactly the thing a three
+     year old will find and press. */
+  #dock{
+    position:fixed; z-index:6;
+    left:50%; bottom:calc(12px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    display:flex; flex-direction:column; align-items:center; gap:7px;
+    transition:transform .24s cubic-bezier(.32,.72,0,1);
+  }
+  #dock.shut{transform:translateX(-50%) translateY(calc(100% - 30px));}
+  #dock.gone{display:none;}
+  #dockTab{
+    width:54px; height:26px; padding:0; border-radius:999px;
+    border:1px solid var(--chrome-edge);
+    background:var(--chrome-fill); color:var(--chrome-ink);
+    font-size:13px; line-height:1; cursor:pointer;
+    backdrop-filter:blur(12px);
+  }
+  #dockTab .caret{display:inline-block; transition:transform .24s ease;}
+  #dock.shut #dockTab .caret{transform:rotate(180deg);}
+  #dockBar{
+    display:flex; align-items:center; justify-content:center;
+    flex-wrap:wrap; gap:9px 11px;
+    padding:9px 13px; border-radius:18px;
+    border:1px solid var(--chrome-edge);
+    background:var(--chrome-fill);
+    backdrop-filter:blur(14px);
+    max-width:min(95vw, 560px);
+  }
+  .dock-group{display:flex; flex-direction:column; align-items:center; gap:5px;}
+  .dock-cap{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:8px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--chrome-ink); opacity:.55;
+  }
+  .dock-set{display:flex; align-items:center; gap:6px;}
+  .dock-rule{width:1px; align-self:stretch; background:var(--chrome-edge); margin:3px 0;}
+  .dot{
+    width:27px; height:27px; padding:0; border-radius:999px;
+    border:1px solid rgba(128,128,128,.55); cursor:pointer;
+    transition:box-shadow .14s ease;
+  }
+  .dot.on{box-shadow:0 0 0 2px var(--bg), 0 0 0 4px var(--chrome-ink);}
+  .step{
+    min-width:32px; height:27px; padding:0 7px;
+    border-radius:9px; border:1px solid var(--chrome-edge);
+    background:transparent; color:var(--chrome-ink);
+    font-size:14px; font-weight:600; line-height:1; cursor:pointer;
+  }
+  .step.on{background:var(--chrome-ink); color:var(--bg); border-color:var(--chrome-ink);}
 
   #burst{position:fixed; inset:0; z-index:7; pointer-events:none; overflow:hidden;}
   #burst span{
@@ -346,7 +401,7 @@
 <div id="hud">
   <div id="tally">
     <div id="pips"><i></i><i></i><i></i><i></i><i></i></div>
-    <span id="hitCount">0</span>
+    <span id="hitCount">0</span><span class="cap">DONE</span>
     <span id="eyeTag" class="hide">L</span>
   </div>
   <div id="prompt" class="hide">
@@ -354,6 +409,37 @@
     <span id="promptText">Find this one</span>
   </div>
   <button id="gear" aria-label="Hold to open settings">&#9881;</button>
+</div>
+
+<div id="dock">
+  <button id="dockTab" aria-label="Hide controls" aria-expanded="true"><span class="caret">&#8964;</span></button>
+  <div id="dockBar">
+    <div class="dock-group">
+      <span class="dock-cap">Pieces</span>
+      <div class="dock-set" id="dockPieces">
+        <button class="step" data-n="2">2</button>
+        <button class="step on" data-n="4">4</button>
+        <button class="step" data-n="6">6</button>
+        <button class="step" data-n="9">9</button>
+      </div>
+    </div>
+    <div class="dock-rule"></div>
+    <div class="dock-group">
+      <span class="dock-cap">Field</span>
+      <div class="dock-set" id="dockBgs">
+        <button class="dot" data-bg="#000000" style="background:#000000" aria-label="Black background"></button>
+        <button class="dot on" data-bg="#ffffff" style="background:#ffffff" aria-label="White background"></button>
+      </div>
+    </div>
+    <div class="dock-rule"></div>
+    <div class="dock-group">
+      <span class="dock-cap">Both eyes</span>
+      <div class="dock-set" id="dockFusion">
+        <button class="step on" data-fusion="0">Off</button>
+        <button class="step" data-fusion="1">On</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="burst" aria-hidden="true"></div>
@@ -366,7 +452,7 @@
     <div id="preview"></div>
     <div>
       <h1>Shape hunt</h1>
-      <p>Every piece he picks up is inked for one eye only. The gear brings you back here.</p>
+      <p>Every piece is inked for one eye only.</p>
     </div>
   </div>
 
@@ -385,7 +471,7 @@
 
   <div class="row" id="pieceRow">
     <div>
-      <div class="label">How many pieces<span class="sub">Pieces alternate between his eyes, so he swaps eyes as he works through one puzzle.</span></div>
+      <div class="label">How many pieces<span class="sub">Each piece goes to a different eye.</span></div>
     </div>
     <div class="chips" id="pieceChips">
       <button class="chip" data-n="2">2</button>
@@ -397,7 +483,7 @@
 
   <div class="row hide" id="tapRow">
     <div>
-      <div class="label">Shapes on screen<span class="sub">More than one means he has to match the shape in the corner.</span></div>
+      <div class="label">Shapes on screen<span class="sub">More than one means matching the shape in the corner.</span></div>
     </div>
     <div class="chips" id="tapChips">
       <button class="chip on" data-n="1">1</button>
@@ -408,7 +494,7 @@
 
   <div class="row hide" id="sortRow">
     <div>
-      <div class="label">Holes to choose from<span class="sub">The holes are dim and both eyes see them. The piece is for one eye.</span></div>
+      <div class="label">Holes to choose from<span class="sub">Holes are for both eyes; the piece is for one.</span></div>
     </div>
     <div class="chips" id="holeChips">
       <button class="chip" data-n="1">1</button>
@@ -448,7 +534,7 @@
       <button class="chip" data-tones="4">4</button>
       <button class="chip" data-tones="0">Full grey</button>
     </div>
-    <label class="sub" for="biasRange">Ink balance <b id="biasVal">0</b><span class="sub">Slide until the picture reads clearly. More ink to the right.</span></label>
+    <label class="sub" for="biasRange">Ink balance <b id="biasVal">0</b><span class="sub">More ink to the right.</span></label>
     <input id="biasRange" type="range" min="-40" max="40" value="0" aria-label="Ink balance" />
   </div>
 
@@ -495,31 +581,26 @@
   </div>
 
   <div class="row" id="mixRow">
-    <div class="label">Mix eyes in one round<span class="sub">Decoy shapes go to the other eye, so both eyes have to stay switched on.</span></div>
+    <div class="label">Mix eyes in one round<span class="sub">Decoy shapes go to the other eye.</span></div>
     <button id="mixEyes" class="toggle" role="switch" aria-checked="false" aria-label="Mix eyes in one round"></button>
   </div>
 
   <div class="row" id="fusionRow">
     <div>
       <span class="eyebrow">Both eyes</span>
-      <div class="label">Both eyes needed<span class="sub" id="fusionNote">Each piece goes to one eye and the hole it belongs in goes to the <em>other</em> eye, with the frame visible to both. He cannot place anything unless both eyes are working at once. If he stalls badly, turn this back off.</span></div>
+      <div class="label">Both eyes needed<span class="sub" id="fusionNote">Piece to one eye, its hole to the other. He cannot place anything one-eyed. Turn off if he stalls.</span></div>
     </div>
     <button id="fusion" class="toggle" role="switch" aria-checked="false" aria-label="Both eyes needed"></button>
   </div>
 
   <div class="row" id="assistRow">
-    <div class="label">Show where it goes<span class="sub">In Blocks, picking a piece up lights the holes it fits. Turn off once he does it without help.</span></div>
+    <div class="label">Show where it goes<span class="sub">Picking a piece up lights the holes it fits.</span></div>
     <button id="assist" class="toggle on" role="switch" aria-checked="true" aria-label="Show where it goes"></button>
   </div>
 
   <div class="row">
     <div class="label">Show the eye tag<span class="sub">A small L or R up top so you can check by covering an eye.</span></div>
     <button id="showTag" class="toggle" role="switch" aria-checked="false" aria-label="Show the eye tag"></button>
-  </div>
-
-  <div class="row">
-    <div class="label">Childproof the gear<span class="sub">Off, one tap opens this sheet. On, it takes three quick taps. Loading the page with <b>#settings</b> on the end always works.</span></div>
-    <button id="childLock" class="toggle" role="switch" aria-checked="false" aria-label="Childproof the gear"></button>
   </div>
 
   <div class="row stack">
@@ -534,7 +615,7 @@
     </div>
     <label class="sub" for="blueRange">Blue let through by the second lens <b id="blueVal">0%</b></label>
     <input id="blueRange" type="range" min="0" max="100" value="0" aria-label="Blue let through by the second lens" />
-    <label class="sub" for="redRange">Blue let through by the <em>red</em> lens <b id="redVal">0%</b><span class="sub">Raise this if the red-lens eye can still make out its own ink. It pushes that ink towards magenta, which is usually what a real red filter needs.</span></label>
+    <label class="sub" for="redRange">Blue let through by the <em>red</em> lens <b id="redVal">0%</b><span class="sub">Raise until the red-lens eye stops seeing its own ink.</span></label>
     <input id="redRange" type="range" min="0" max="100" value="0" aria-label="Blue let through by the red lens" />
     <div class="chips">
       <input id="inkRed" class="panel-color" type="color" value="#ff0000" aria-label="Red ink" />
@@ -545,6 +626,14 @@
     </div>
     <div id="leak"><i></i><span></span></div>
     <div id="leakRed" class="stats"></div>
+  </div>
+
+  <div class="row">
+    <div>
+      <span class="eyebrow">Setup</span>
+      <div class="label">Childproof the gear<span class="sub">On, the gear needs three quick taps. <b>#settings</b> on the URL always works.</span></div>
+    </div>
+    <button id="childLock" class="toggle" role="switch" aria-checked="false" aria-label="Childproof the gear"></button>
   </div>
 
   <div class="row">
@@ -772,6 +861,11 @@
   const play = $('play'), field = $('field');
   const HUD_CLEARANCE = 92;
 
+  /* The dock covers the bottom strip; layout has to keep clear of it or tray
+     pieces and targets slide underneath and cannot be picked up. */
+  function dockShown(){ return !state.childLock && state.mode !== 'tap'; }
+  function bottomClear(){ return dockShown() ? 104 : 12; }
+
   function sizePx(){
     return Math.round(state.size / 100 * Math.min(window.innerWidth, window.innerHeight));
   }
@@ -780,7 +874,7 @@
     const s = sizePx(), pad = 10;
     const w = field.clientWidth, h = field.clientHeight;
     const x0 = pad + s/2, x1 = w - pad - s/2;
-    const y0 = HUD_CLEARANCE + s/2, y1 = h - pad - s/2;
+    const y0 = HUD_CLEARANCE + s/2, y1 = h - bottomClear() - s/2;
     return {
       x0: Math.min(x0, w/2), x1: Math.max(x1, w/2),
       y0: Math.min(y0, h/2), y1: Math.max(y1, h/2)
@@ -889,7 +983,7 @@
   function jigsawLayout(){
     const pad = 12;
     const availW = field.clientWidth - pad * 2;
-    const availH = field.clientHeight - HUD_CLEARANCE - pad;
+    const availH = field.clientHeight - HUD_CLEARANCE - bottomClear();
     const wide = availW > availH;
     const half = wide ? { w:(availW - pad) / 2, h:availH } : { w:availW, h:(availH - pad) / 2 };
     const side = Math.max(60, Math.min(half.w, half.h) * 0.94);
@@ -1497,7 +1591,7 @@
     if (state.fusion){
       const pad = 14;
       addFrame(pad, HUD_CLEARANCE, field.clientWidth - pad * 2,
-               field.clientHeight - HUD_CLEARANCE - pad, inkFor('both'));
+               field.clientHeight - HUD_CLEARANCE - bottomClear(), inkFor('both'));
     }
     const piece = makeThing(state.goal, inkFor(state.curEye), 'piece', spots[n]);
     piece.dataset.home = JSON.stringify(spots[n]);
@@ -1855,15 +1949,21 @@
     }
     $('modeNote').textContent =
       state.mode === 'jigsaw' ? 'Build the picture, one piece at a time.'
-    : state.mode === 'blocks' ? 'Drop each block into the hole it fits. Shape set picks small blocks or full tetrominoes.'
-    : state.mode === 'sort'   ? 'Drag the bright piece onto the dim hole that matches it.'
+    : state.mode === 'blocks' ? 'Drop each block into the hole it fits.'
+    : state.mode === 'sort'   ? 'Drag the piece onto the hole that matches it.'
     :                           'Touch the shape wherever it lands.';
     $('eyeNote').textContent = state.eyePlan === 'alt'
-      ? (gridded ? 'Balanced: half the pieces per eye. He picks his own order, so it is an even mix, not a strict sequence.'
+      ? (gridded ? 'Half the pieces per eye. He picks the order, so it is a mix, not a sequence.'
                  : 'Strict left, right, left, right.')
       : (state.eyePlan === 'both' ? 'Both eyes see every shape. No training value, but a nice warm up.'
                                   : 'Every shape goes to the ' + (state.eyePlan === 'L' ? 'left' : 'right') + ' eye.');
     $('sizeNote').textContent = state.size + '% of the short side';
+
+    /* Dock and panel are peers — both marked from here, never separately. */
+    mark('#dockPieces .step', 'n', String(state.pieces));
+    mark('#dockBgs .dot', 'bg', state.bg);
+    mark('#dockFusion .step', 'fusion', state.fusion ? '1' : '0');
+    $('dock').classList.toggle('gone', !!state.childLock || state.mode === 'tap');
 
     paintPreview(); paintLeak(); paintStats(); paintHud();
   }
@@ -1915,6 +2015,9 @@
   group('holeChips',  btn => { state.holes = Number(btn.dataset.n); });
   group('shapeChips', btn => { state.shapeSet = btn.dataset.set; });
   group('picChips',   btn => { state.picture = btn.dataset.pic; });
+  group('dockPieces', btn => { state.pieces = Number(btn.dataset.n); });
+  group('dockBgs',    btn => { state.bg = btn.dataset.bg; calibBg = state.bg; });
+  group('dockFusion', btn => { state.fusion = btn.dataset.fusion === '1'; });
   group('toneChips',  btn => { state.tones = Number(btn.dataset.tones); });
   group('bgChips',    btn => { state.bg = btn.dataset.bg; calibBg = state.bg; });
   group('eyeChips',   btn => { state.eyePlan = btn.dataset.eye; state.round = 0; });
@@ -1929,7 +2032,7 @@
   toggle('mixEyes', 'mix', () => { paint(); newRound(); });
   toggle('showTag', 'showTag', paintHud);
   toggle('sound', 'sound');
-  toggle('childLock', 'childLock');
+  toggle('childLock', 'childLock', () => { paint(); newRound(); });
   toggle('assist', 'assist');
   toggle('fusion', 'fusion', () => { paint(); newRound(); });
 
@@ -2113,6 +2216,12 @@
     taps.push(now);
     gear.classList.toggle('arming', taps.length === 2);
     if (taps.length >= 3){ taps = []; gear.classList.remove('arming'); openPanel(); }
+  });
+
+  $('dockTab').addEventListener('click', () => {
+    const shut = $('dock').classList.toggle('shut');
+    $('dockTab').setAttribute('aria-expanded', String(!shut));
+    $('dockTab').setAttribute('aria-label', shut ? 'Show controls' : 'Hide controls');
   });
 
   $('done').addEventListener('click', () => { closePanel(); newRound(); });
