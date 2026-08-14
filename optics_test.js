@@ -104,33 +104,33 @@ function suite(label, m){
     Math.abs(m.through('green','#ebdb34') - 255) / 255 < 0.2);
 }
 
-/* puzzle.html only. eye-trainer.html still has the white-field inversion
-   described below and fails these; see the backlog in HANDOFF.md. */
-function whiteFieldSuite(label, m){
+/* Both apps. This is the bug that made calibrating on white impossible: the
+   meter reported the measured, doctor-approved inks as unusable. */
+function meterRolesSuite(label, m){
   console.log('\n' + label + ' — meter roles on a white field');
   const t = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? '  ok   ' : '  FAIL ') + name); };
   m.setState({ pair:'cyan', bluePass:1, red:'#ff2ecb', green:'#2effe7', redSide:'L', bg:'#ffffff' });
   m.setBg('#ffffff');
-  /* Both of these are inks measured on a real pair of filters.
-     They separate almost perfectly, and the meter must say so. */
   t('measured magenta reads as clean', m.reading('red').ghost < 0.06);
   t('measured magenta is not called faint', m.reading('red').own > 0.3);
   t('measured cyan reads as clean', m.reading('green').ghost < 0.06);
   t('measured cyan is not called faint', m.reading('green').own > 0.3);
 
-  console.log('  a leaky red filter wants magenta, not red');
+  console.log('  and a leaky red filter must show pure red as bad');
   m.setState({ pair:'cyan', bluePass:1, red:'#ff0000', green:'#00ffff', redSide:'L',
                bg:'#ffffff', redBlue:1 });
-  /* Exactly half: the red lens averages R and B, so #ff0000 on white reads
-     127.5 against a 255 field — half contrast leaking to the eye that is
-     supposed to see nothing. This is the number magenta fixes. */
   t('pure red ghosts 50% when the red lens passes blue',
     Math.abs(m.reading('red').ghost - 0.5) < 0.01);
-  t('bestInk moves it to magenta', m.bestInk('red') === '#ff00ff');
   m.setState({ pair:'cyan', bluePass:1, red:'#ff00ff', green:'#00ffff', redSide:'L',
                bg:'#ffffff', redBlue:1 });
   t('magenta is clean through the leaky red lens', m.reading('red').ghost < 0.06);
+}
 
+/* puzzle.html only — bestInk and the tone ramp do not exist in the chart. */
+function whiteFieldSuite(label, m){
+  const t = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? '  ok   ' : '  FAIL ') + name); };
+  console.log('\n' + label + ' — cleanup and the tone ramp');
+  m.setBg('#ffffff');
   /* "Clean up" used to treat a leak as absent below 15%, so at a 10% setting
      it returned pure red and left ~9% ghosting while claiming to be clean.
      The rule is any leak at all, so these boundaries must hold. */
@@ -162,6 +162,8 @@ function whiteFieldSuite(label, m){
 suite('reference model', reference());
 suite('eye-trainer.html', modelFrom('eye-trainer.html'));
 suite('puzzle.html', modelFrom('puzzle.html'));
+meterRolesSuite('eye-trainer.html', modelFrom('eye-trainer.html'));
+meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 
 console.log(`\n${pass} passed, ${fail} failed`);

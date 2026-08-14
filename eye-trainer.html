@@ -490,6 +490,11 @@
       <input id="blueRange" type="range" min="0" max="100" value="0" aria-label="Blue let through by the second lens" />
     </div>
 
+    <div id="redWrap" class="calib-slider">
+      <label>Blue let through by the <em>red</em> lens <span id="redVal">0%</span></label>
+      <input id="redRange" type="range" min="0" max="100" value="0" aria-label="Blue let through by the red lens" />
+    </div>
+
     <div id="calibLeak"><i></i><span></span><button id="calibFix" class="chip">Clean it up</button></div>
 
     <div id="calibTune">
@@ -765,7 +770,7 @@
 
   const state = {
     fg:'#ff0000', bg:'#000000', size:42, count:1,
-    red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0,
+    red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0, redBlue:0,
     mode:'single', redSide:'L', slots:['L','R','R'],
     order:'random', noRepeat:true, rotate:false, shuffle:true,
     autoMs:0, haptics:true, dockOn:true,
@@ -1168,7 +1173,10 @@
   /* Real lenses sit between the labels: a 'green' lens usually passes some
      blue too, which is why a pure green ink can still ghost. */
   function weights(lensKey){
-    if (lensKey === 'red') return [1, 0, 0];
+    /* The red filter leaks too, and what it leaks is blue. On a white field
+       that is the difference between a pure red ink ghosting at half contrast
+       and a magenta one vanishing cleanly. */
+    if (lensKey === 'red') return [1, 0, state.redBlue || 0];
     return [0, LENS[state.pair].g, state.pair === 'blue' ? 1 : state.bluePass];
   }
 
@@ -1223,27 +1231,34 @@
 
   function reading(key){
     const hex = state[key === 'red' ? 'red' : 'green'];
-    const ownLens   = key === 'red' ? 'red' : state.pair;
-    const wrongLens = key === 'red' ? state.pair : 'red';
+    /* On a white field inkFor hands each ink to the OPPOSITE eye, so the lens
+       that is meant to see it swaps too. Without this the meter grades a
+       correctly tuned white-field ink as 100% ghosting and too faint, which
+       makes calibrating on white impossible. */
+    const onWhite = (calibBg || '#000000').toLowerCase() === '#ffffff';
+    const redIsOwn  = (key === 'red') !== onWhite;
+    const ownLens   = redIsOwn ? 'red' : state.pair;
+    const wrongLens = redIsOwn ? state.pair : 'red';
     const own = visible(ownLens, hex), wrong = visible(wrongLens, hex);
     return { own:own, wrong:wrong, ghost: own ? Math.min(1, wrong / own) : 1 };
   }
 
   /* Push the wrong lens's channels all the way to the field, so that eye
      sees nothing, and drive the ink's own channel to full contrast. */
+  /* Hold every channel the wrong lens passes at the field value, and drive
+     the rest to full contrast for the eye that should see it. This used to
+     assume state.red always belonged to the red-lens eye, which is only true
+     on black — on white it returned an ink for the wrong eye entirely. */
   function purify(key){
     const onWhite = calibBg.toLowerCase() === '#ffffff';
-    const hex = state[key === 'red' ? 'red' : 'green'];
-    const c = rgbOf(hex);
-    const hide = onWhite ? 255 : 0;
-    const hx = v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2,'0');
-    if (key === 'red'){
-      const lvl = onWhite ? Math.min(c.r, 90) : Math.max(c.r, 165);
-      return '#' + hx(lvl) + hx(hide) + hx(hide);
+    const f = onWhite ? 255 : 0, o = onWhite ? 0 : 255;
+    const hx = v => v.toString(16).padStart(2, '0');
+    const hideFrom = ((key === 'red') !== onWhite) ? state.pair : 'red';
+    if (hideFrom === 'red'){
+      return '#' + hx(f) + hx(o) + hx((state.redBlue || 0) > 0 ? f : o);
     }
     const w = weights(state.pair);
-    const lvl = onWhite ? Math.min(through(state.pair, hex), 90) : Math.max(through(state.pair, hex), 165);
-    return '#' + hx(hide) + hx(w[1] ? lvl : hide) + hx(w[2] ? lvl : hide);
+    return '#' + hx(o) + hx(w[1] ? f : o) + hx(w[2] > 0 ? f : o);
   }
 
   function hueSpan(key){
@@ -1269,7 +1284,7 @@
   function defaultOther(){
     const w = weights(state.pair);
     const hx = v => v.toString(16).padStart(2,'0');
-    return '#00' + hx(w[1] ? 255 : 0) + hx(w[2] > 0.15 ? 255 : 0);
+    return '#00' + hx(w[1] ? 255 : 0) + hx(w[2] > 0 ? 255 : 0);
   }
 
   function bullet(color, html){
@@ -1294,6 +1309,7 @@
     $('calibPrev').style.visibility = step === 0 ? 'hidden' : 'visible';
     $('calibPairPick').style.display = kind === 'glasses' ? 'flex' : 'none';
     $('blueWrap').style.display = (kind === 'glasses' && state.pair !== 'blue') ? '' : 'none';
+    $('redWrap').style.display = kind === 'glasses' ? '' : 'none';
     $('calibTune').style.display = (kind === 'red' || kind === 'other') ? '' : 'none';
     $('calibLeak').style.display = (kind === 'red' || kind === 'other') ? 'flex' : 'none';
 
@@ -1436,6 +1452,12 @@
     state.bluePass = Number($('blueRange').value) / 100;
     $('blueVal').textContent = $('blueRange').value + '%';
     state.green = defaultOther();
+    refreshInkSwatches(); paintCalib();
+  });
+
+  $('redRange').addEventListener('input', () => {
+    state.redBlue = Number($('redRange').value) / 100;
+    $('redVal').textContent = $('redRange').value + '%';
     refreshInkSwatches(); paintCalib();
   });
 
