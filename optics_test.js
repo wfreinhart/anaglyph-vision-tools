@@ -38,6 +38,19 @@ function modelFrom(html, extra){
   return new Function(body)();
 }
 
+/* Lift the persisted-state validator. It is a slice, not a brace block:
+   SCHEMA and its validators are const arrow declarations. */
+function guardsFrom(html){
+  const src = fs.readFileSync(html, 'utf8');
+  const js  = src.slice(src.indexOf('<script>') + 8, src.indexOf('</script>'));
+  const a = js.indexOf('const oneOf =');
+  const b = js.indexOf('const state = Object.assign(');
+  if (a < 0 || b < 0 || b < a) throw new Error('validator block not found');
+  return new Function(
+    braceBlock(js, 'const LENS = {') + ';\n' + js.slice(a, b) +
+    '\nreturn { sanitize, dropped: () => dropped };')();
+}
+
 /* ---------- the reference copy ---------- */
 function reference(){
   const LENS = { cyan:{g:1,b:1}, green:{g:1,b:0}, blue:{g:0,b:1} };
@@ -159,12 +172,69 @@ function whiteFieldSuite(label, m){
     m.visible('red', m.rampInk('L', 0.25)) < m.visible('red', m.rampInk('L', 1)));
 }
 
+/* puzzle.html only — the chart holds no state, by design. */
+function guardSuite(label, g, m){
+  const t = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? '  ok   ' : '  FAIL ') + name); };
+  console.log('\n' + label + ' — restoring saved settings');
+
+  const good = { mode:'blocks', pieces:6, bg:'#ffffff', eyePlan:'alt', fusion:true,
+                 red:'#ff2ecb', green:'#2effe7', pair:'cyan', bluePass:1,
+                 redBlue:0.4, redSide:'R', size:30, tones:3, picBias:-12 };
+  t('a valid save survives intact',
+    JSON.stringify(g.sanitize(good)) === JSON.stringify(good));
+
+  console.log('  bad values are dropped, not adopted');
+  /* The one that matters clinically: inkFor() asks `eye === state.redSide`,
+     so any redSide outside L/R is false for both eyes and both get the same
+     ink — a session that looks normal and trains nothing. */
+  [['redSide', 'X'], ['redSide', null], ['redSide', 'l'],
+   ['pair', 'purple'], ['pair', 'toString'], ['pair', 0],
+   ['red', 'red'], ['red', '#ff00'], ['green', 123],
+   ['mode', 'tetris'], ['pieces', 5], ['pieces', '4'], ['bg', '#123456'],
+   ['eyePlan', 'left'], ['size', 900], ['size', 22.5], ['tones', 7],
+   ['bluePass', 4], ['bluePass', NaN], ['redBlue', -1],
+   ['picIdx', -1], ['picBias', 99], ['sound', 'yes'], ['fusion', 1]
+  ].forEach(([k, v]) => {
+    const out = g.sanitize({ [k]: v });
+    t('  ' + k + ' = ' + JSON.stringify(v) + ' is refused', !(k in out));
+  });
+
+  console.log('  hostile shapes do not throw');
+  t('unknown keys are dropped', !('evil' in g.sanitize({ evil:1 })));
+  /* `in` would answer true for anything on Object.prototype, so this has to
+     ask about own keys. A plain SCHEMA[k] lookup here returns
+     Object.prototype and then tries to call it. */
+  let proto = null;
+  try { proto = g.sanitize(JSON.parse('{"__proto__":{"pwned":1}}')); } catch(_){}
+  t('a __proto__ key is dropped, not called',
+    proto && !Object.prototype.hasOwnProperty.call(proto, '__proto__'));
+  t('and nothing was polluted', {}.pwned === undefined);
+  ['null', '"a string"', '[1,2]', '42'].forEach(json => {
+    let ok = true;
+    try { g.sanitize(JSON.parse(json)); } catch(_){ ok = false; }
+    t('  ' + json + ' returns empty instead of throwing',
+      ok && Object.keys(g.sanitize(JSON.parse(json))).length === 0);
+  });
+
+  console.log('  and the invariant behind all of it');
+  m.setState({ pair:'green', bluePass:0, red:'#ff0000', green:'#ff0000',
+               redSide:'L', bg:'#ffffff' });
+  t('two identical inks send both eyes the same thing',
+    m.inkFor('L','#ffffff') === m.inkFor('R','#ffffff'));
+  m.setState({ pair:'green', bluePass:0, red:'#ff0000', green:'#00ff00',
+               redSide:'L', bg:'#ffffff' });
+  t('the default pair splits on both fields',
+    m.inkFor('L','#000000') !== m.inkFor('R','#000000') &&
+    m.inkFor('L','#ffffff') !== m.inkFor('R','#ffffff'));
+}
+
 suite('reference model', reference());
 suite('eye-trainer.html', modelFrom('eye-trainer.html'));
 suite('puzzle.html', modelFrom('puzzle.html'));
 meterRolesSuite('eye-trainer.html', modelFrom('eye-trainer.html'));
 meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
+guardSuite('puzzle.html', guardsFrom('puzzle.html'), modelFrom('puzzle.html'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

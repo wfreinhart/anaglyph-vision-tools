@@ -305,6 +305,13 @@
   .masthead h1{margin:0; font-size:17px; font-weight:640; letter-spacing:-.01em;}
   .masthead p{margin:5px 0 0; font-size:12.5px; color:var(--panel-muted); line-height:1.4;}
 
+  .notice{
+    margin:14px 0 0; padding:10px 12px; border-radius:10px;
+    border:1px solid var(--warn); color:var(--warn);
+    font-size:12.5px; line-height:1.45;
+  }
+  .notice.hide{display:none;}
+
   .row{
     display:grid; grid-template-columns:minmax(0,1fr) auto;
     gap:14px; align-items:center;
@@ -455,6 +462,8 @@
       <p>Every piece is inked for one eye only.</p>
     </div>
   </div>
+
+  <div id="stateNote" class="notice hide"></div>
 
   <div class="row">
     <div>
@@ -673,8 +682,10 @@
       catch(_){ return dflt; }
     },
     set(key, value){
-      try{ localStorage.setItem(key, JSON.stringify(value)); }catch(_){}
-    }
+      try{ localStorage.setItem(key, JSON.stringify(value)); store.ok = true; }
+      catch(_){ store.ok = false; }
+    },
+    ok: true
   };
   const CALIB_KEY = 'anaglyph.calib.v1';
   const GAME_KEY  = 'anaglyph.puzzle.v1';
@@ -688,6 +699,48 @@
     blue: { name:'blue',  hue:225, g:0, b:1 }
   };
 
+  /* ---------- restoring saved settings ----------
+     Nothing that comes back out of the store is trusted. A bad value here
+     is worse than a crash: `inkFor()` asks `eye === state.redSide`, so a
+     redSide of anything but 'L' or 'R' is false for BOTH eyes, both get the
+     same ink, and the app runs looking perfectly normal while training
+     nothing. So every persisted key declares what it is allowed to be,
+     anything else is dropped back to the default, and the surviving set is
+     checked against the one invariant the exercise rests on. */
+  const oneOf = list => v => list.indexOf(v) >= 0;
+  const isHex = v => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
+  const isBool = v => v === true || v === false;
+  const numIn = (lo, hi) => v => typeof v === 'number' && isFinite(v) && v >= lo && v <= hi;
+  const intIn = (lo, hi) => v => numIn(lo, hi)(v) && v === Math.round(v);
+
+  const SCHEMA = {
+    mode:oneOf(['jigsaw','blocks','sort','tap']), pieces:oneOf([2,4,6,9]),
+    taps:intIn(1,3), holes:intIn(1,3), shapeSet:oneOf(['simple','all']),
+    picture:oneOf(['shapes','photo']), tones:oneOf([0,2,3,4]),
+    picBias:intIn(-40,40), picIdx:intIn(0,999),
+    size:intIn(8,45), bg:oneOf(['#000000','#ffffff']),
+    eyePlan:oneOf(['alt','L','R','both']),
+    mix:isBool, showTag:isBool, sound:isBool, childLock:isBool,
+    assist:isBool, fusion:isBool,
+    red:isHex, green:isHex, redSide:oneOf(['L','R']),
+    pair:v => Object.prototype.hasOwnProperty.call(LENS, v),
+    bluePass:numIn(0,1), redBlue:numIn(0,1)
+  };
+
+  let dropped = 0;
+  function sanitize(raw){
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    Object.keys(raw).forEach(k => {
+      /* hasOwnProperty, not `SCHEMA[k]` — JSON.parse happily produces a
+         '__proto__' key, and a plain lookup would hand back Object.prototype
+         and then try to call it. */
+      const rule = Object.prototype.hasOwnProperty.call(SCHEMA, k) ? SCHEMA[k] : null;
+      if (typeof rule === 'function' && rule(raw[k])) out[k] = raw[k]; else dropped++;
+    });
+    return out;
+  }
+
   const state = Object.assign({
     mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple',
     picture:'shapes', tones:3, picBias:0, picIdx:0,
@@ -696,7 +749,7 @@
     fusion:false,
     red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0, redBlue:0, redSide:'L',
     hits:0, misses:0, round:0, curEye:'L', goal:null, t0:0
-  }, store.get(CALIB_KEY, {}), store.get(GAME_KEY, {}));
+  }, sanitize(store.get(CALIB_KEY, {})), sanitize(store.get(GAME_KEY, {})));
   state.hits = 0; state.misses = 0; state.round = 0;
 
   let calibBg = state.bg;
@@ -712,6 +765,19 @@
     const lensIsRed = (eye === state.redSide);
     if (onWhite) return lensIsRed ? state.green : state.red;
     return lensIsRed ? state.red : state.green;
+  }
+
+  /* The invariant. Type-checking each field cannot catch two inks that are
+     individually valid and identical to each other — that leaves both eyes
+     seeing everything, which is a broken exercise, not a broken app. On
+     either field, the two eyes must get different ink. */
+  function inksSplit(){
+    return ['#000000', '#ffffff'].every(bg => inkFor('L', bg) !== inkFor('R', bg));
+  }
+  if (!inksSplit()){
+    state.red = '#ff0000'; state.green = '#00ff00';
+    state.pair = 'green'; state.bluePass = 0; state.redBlue = 0; state.redSide = 'L';
+    dropped++;
   }
 
   /* Real lenses sit between the labels: a 'green' lens usually passes some
@@ -1034,7 +1100,13 @@
      it is a picture of his own toys. */
   const PIC_KEY = 'anaglyph.pics.v1';
   const PIC_SIZE = 512;
-  let pics = store.get(PIC_KEY, []);
+  /* Same rule as the settings: a stored entry that is not a data URL is not
+     a picture, and picIdx has to land inside whatever survives. */
+  const picsRaw = store.get(PIC_KEY, []);
+  let pics = (Array.isArray(picsRaw) ? picsRaw : []).filter(
+    p => typeof p === 'string' && p.slice(0, 11) === 'data:image/');
+  if (state.picIdx >= pics.length) state.picIdx = 0;
+  if (state.picture === 'photo' && !pics.length) state.picture = 'shapes';
   let picLum = null, picOtsu = 128, picReady = false, picThumb = null;
   let layerCache = { key:null };
 
@@ -1805,26 +1877,38 @@
            '-' + String(d.getDate()).padStart(2, '0');
   }
 
+  /* Under "use strict" a corrupt log is not a cosmetic problem: if the
+     stored value came back a string, `log[today()] = {}` throws and takes
+     the tap handler with it. Shape-check on the way in. */
+  const isPlain = v => !!v && typeof v === 'object' && !Array.isArray(v);
+  const num = v => typeof v === 'number' && isFinite(v) ? v : 0;
+  function readLog(){ const raw = store.get(LOG_KEY, {}); return isPlain(raw) ? raw : {}; }
+
   function record(eye, hit, ms){
-    const log = store.get(LOG_KEY, {});
-    const day = log[today()] || (log[today()] = {});
-    const e = day[eye] || (day[eye] = { hits:0, misses:0, ms:0 });
+    const log = readLog();
+    const key = today();
+    if (!isPlain(log[key])) log[key] = {};
+    const day = log[key];
+    if (!isPlain(day[eye])) day[eye] = { hits:0, misses:0, ms:0 };
+    const e = day[eye];
+    e.hits = num(e.hits); e.misses = num(e.misses); e.ms = num(e.ms);
     if (hit){ e.hits += 1; e.ms += Math.round(ms); } else e.misses += 1;
     store.set(LOG_KEY, log);
   }
 
   function paintStats(){
-    const log = store.get(LOG_KEY, {});
-    const day = log[today()];
+    const log = readLog();
+    const day = isPlain(log[today()]) ? log[today()] : null;
     if (!day || !Object.keys(day).length){ $('statLine').textContent = 'No taps yet today.'; return; }
     const name = { L:'left ', R:'right', both:'both ' };
     const lines = ['this session   ' + state.hits + ' right, ' + state.misses + ' wrong', ''];
     Object.keys(day).sort().forEach(eye => {
-      const e = day[eye];
-      const avg = e.hits ? (e.ms / e.hits / 1000).toFixed(1) + 's' : '  —';
+      const e = isPlain(day[eye]) ? day[eye] : {};
+      const hits = num(e.hits), misses = num(e.misses), tot = num(e.ms);
+      const avg = hits ? (tot / hits / 1000).toFixed(1) + 's' : '  —';
       lines.push('today ' + (name[eye] || eye) + '   ' +
-                 String(e.hits).padStart(3) + ' right   ' +
-                 String(e.misses).padStart(3) + ' wrong   ' +
+                 String(hits).padStart(3) + ' right   ' +
+                 String(misses).padStart(3) + ' wrong   ' +
                  avg.padStart(5) + ' avg');
     });
     $('statLine').textContent = lines.join('\n');
@@ -1965,7 +2049,18 @@
     mark('#dockFusion .step', 'fusion', state.fusion ? '1' : '0');
     $('dock').classList.toggle('gone', !!state.childLock || state.mode === 'tap');
 
+    paintNotice();
     paintPreview(); paintLeak(); paintStats(); paintHud();
+  }
+
+  /* Both of these are silent by nature — a discarded setting and a store
+     that will not write both leave the app looking fine. Say so, once. */
+  function paintNotice(){
+    const msgs = [];
+    if (dropped) msgs.push('Some saved settings did not make sense and were reset. Check the ink before starting.');
+    if (!store.ok) msgs.push('Settings cannot be saved on this device, so they will not survive a reload.');
+    $('stateNote').textContent = msgs.join(' ');
+    $('stateNote').classList.toggle('hide', !msgs.length);
   }
 
   function persist(){
@@ -2174,7 +2269,7 @@
   sizeRange.addEventListener('change', () => { persist(); paint(); newRound(); });
 
   $('statReset').addEventListener('click', () => {
-    const log = store.get(LOG_KEY, {});
+    const log = readLog();
     delete log[today()];
     store.set(LOG_KEY, log);
     state.hits = 0; state.misses = 0;
