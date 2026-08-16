@@ -565,8 +565,10 @@
     </div>
     <div class="chips" id="picChips">
       <button class="chip on" data-pic="shapes">Shapes</button>
+      <button class="chip" data-pic="scene">Scenes</button>
       <button class="chip" data-pic="photo">Photo</button>
     </div>
+    <div class="chips" id="sceneGallery"></div>
     <div class="chips" id="picGallery"></div>
     <div class="chips">
       <label class="chip" for="picFile">Add a picture</label>
@@ -778,6 +780,64 @@
     { key:'food',     label:'Food' }
   ];
 
+  /* ---------- built-in scenes ----------
+     A few small pictures composed from the same silhouette primitives above,
+     so Jigsaw has ready-made variety with nothing to upload. Every part is
+     solid and the same single ink colour, same as every other shape in this
+     file, which means overlapping parts only ever matter for the SILHOUETTE
+     they trace together (a wide roof over a narrower body, ears poking past
+     a head) — two same-colour fills covering the same pixel are one pixel,
+     not two. A "face" with eyes drawn the same way would be invisible, its
+     eyes swallowed by the head fill, so scenes stick to shapes that either
+     don't overlap (a rocket with stars scattered near it) or overlap only
+     to widen the outer outline (roof/body, the stacked circles of a
+     snowman). `shape` parts map one SHAPES entry into a sub-box of the
+     100x100 scene via translate+scale; `raw` parts are already in scene
+     coordinates and used as-is for the odds and ends no SHAPES entry covers
+     (a water band, a hat, a star). */
+  const SCENES = [
+    { key:'house', label:'House', parts:[
+      { shape:'square',   x:22, y:42, w:56, h:50 },
+      { shape:'triangle', x:12, y:8,  w:76, h:42 }
+    ]},
+    { key:'boat', label:'Boat', parts:[
+      { shape:'boat', x:14, y:4, w:72, h:76 },
+      { raw:'<rect x="0" y="82" width="100" height="18"/>' }
+    ]},
+    { key:'rocket', label:'Rocket', parts:[
+      { shape:'rocket', x:25, y:6, w:50, h:82 },
+      { raw:'<circle cx="12" cy="18" r="4"/>' },
+      { raw:'<circle cx="88" cy="32" r="3.5"/>' },
+      { raw:'<circle cx="14" cy="58" r="3"/>' }
+    ]},
+    { key:'tree', label:'Tree', parts:[
+      { raw:'<circle cx="38" cy="38" r="25"/>' },
+      { raw:'<circle cx="62" cy="38" r="25"/>' },
+      { raw:'<circle cx="50" cy="16" r="22"/>' },
+      { raw:'<rect x="42" y="58" width="16" height="38" rx="3"/>' }
+    ]},
+    { key:'snowman', label:'Snowman', parts:[
+      { raw:'<circle cx="50" cy="76" r="22"/>' },
+      { raw:'<circle cx="50" cy="46" r="16"/>' },
+      { raw:'<circle cx="50" cy="21" r="11"/>' },
+      { raw:'<rect x="40" y="4" width="20" height="9" rx="1"/>' }
+    ]}
+  ];
+
+  function sceneMarkup(scene){
+    const body = scene.parts.map(p => p.raw ? p.raw :
+      '<g transform="translate(' + p.x + ',' + p.y + ') scale(' + (p.w / 100) + ',' + (p.h / 100) + ')">' +
+        SHAPES[p.shape].svg + '</g>'
+    ).join('');
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+      '<rect width="100" height="100" fill="#fff"/><g fill="#000">' + body + '</g></svg>';
+  }
+
+  function sceneSrc(i){
+    const scene = SCENES[i];
+    return scene ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(sceneMarkup(scene)) : null;
+  }
+
   /* Which light each lens lets through. A cyan lens passes green AND blue,
      which is why a cyan-tuned ink behaves differently from a green one. */
   const LENS = {
@@ -803,11 +863,12 @@
   const SCHEMA = {
     mode:oneOf(['jigsaw','blocks','sort','tap']), pieces:oneOf([2,4,6,9]),
     taps:intIn(1,3), holes:intIn(1,3), shapeSet:oneOf(['simple','all']),
-    picture:oneOf(['shapes','photo']), tones:oneOf([0,2,3,4]),
+    picture:oneOf(['shapes','photo','scene']), tones:oneOf([0,2,3,4]),
     pinnedShape: v => v === null || Object.prototype.hasOwnProperty.call(SHAPES, v),
     packs: v => Array.isArray(v) && v.length > 0 &&
                 v.every(p => PACKS.some(pk => pk.key === p)),
     picBias:intIn(-40,40), picContrast:intIn(0,100), picIdx:intIn(0,999),
+    sceneIdx: v => Number.isInteger(v) && v >= 0 && v < SCENES.length,
     /* Black field dropped: it let both eyes read the target too easily and
        defeated the split. White only, so a stored black from before this
        change quietly falls back to the default instead of reviving it. */
@@ -836,7 +897,7 @@
 
   const state = Object.assign({
     mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple', pinnedShape:null, packs:['classic'],
-    picture:'shapes', tones:3, picBias:0, picContrast:45, picIdx:0,
+    picture:'shapes', tones:3, picBias:0, picContrast:45, picIdx:0, sceneIdx:0,
     size:22, bg:'#ffffff',
     eyePlan:'alt', mix:false, showTag:false, sound:true, childLock:false, assist:true,
     fusion:false, holesMove:true,
@@ -1195,6 +1256,7 @@
     p => typeof p === 'string' && p.slice(0, 11) === 'data:image/');
   if (state.picIdx >= pics.length) state.picIdx = 0;
   if (state.picture === 'photo' && !pics.length) state.picture = 'shapes';
+  if (state.sceneIdx >= SCENES.length) state.sceneIdx = 0;
   let picLum = null, picOtsu = 128, picReady = false, picThumb = null;
   let layerCache = { key:null };
 
@@ -1219,7 +1281,7 @@
 
   function analyzePicture(done){
     picReady = false; picLum = null;
-    const src = pics[state.picIdx];
+    const src = state.picture === 'scene' ? sceneSrc(state.sceneIdx) : pics[state.picIdx];
     if (!src){ if (done) done(); return; }
     const img = new Image();
     img.onerror = () => { if (done) done(); };
@@ -1293,7 +1355,8 @@
   }
 
   function layers(){
-    const key = [state.picIdx, state.tones, state.picBias, state.picContrast, state.bg, state.red,
+    const key = [state.picture, state.picIdx, state.sceneIdx, state.tones, state.picBias,
+                 state.picContrast, state.bg, state.red,
                  state.green, state.pair, state.bluePass, state.redBlue,
                  state.redSide].join('|');
     if (layerCache.key !== key){
@@ -1302,7 +1365,9 @@
     return layerCache;
   }
 
-  function usePicture(){ return state.picture === 'photo' && picReady && !!picLum; }
+  function usePicture(){
+    return (state.picture === 'photo' || state.picture === 'scene') && picReady && !!picLum;
+  }
 
   /* ---------- blocks ----------
      A grid mostly filled in, with tetromino-shaped gaps left in it, and the
@@ -2293,7 +2358,22 @@
     btn.classList.toggle('on', !active);
     persist(); paint(); newRound();
   });
-  group('picChips',   btn => { state.picture = btn.dataset.pic; });
+  /* Not group(): switching TO a scene needs analyzePicture() to actually
+     run (built-in scenes are analysed into picLum on demand, same as an
+     uploaded photo, and nothing has done that yet the first time a scene is
+     picked this way rather than via the gallery thumb below). group()'s
+     unconditional trailing newRound() would fire before that finishes and
+     draw one wrong, stale round. 'shapes'/'photo' behave exactly as
+     group() would have. */
+  $('picChips').addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn || !$('picChips').contains(btn)) return;
+    [...$('picChips').querySelectorAll('button')].forEach(b => b.classList.toggle('on', b === btn));
+    state.picture = btn.dataset.pic;
+    persist();
+    if (state.picture === 'scene') reloadPicture();
+    else { paint(); newRound(); }
+  });
   group('dockPieces', btn => { state.pieces = Number(btn.dataset.n); });
   group('dockFusion', btn => { state.fusion = btn.dataset.fusion === '1'; });
   group('dockShapes', btn => { state.pinnedShape = btn.dataset.shape || null; });
@@ -2371,15 +2451,33 @@
       box.appendChild(b);
     });
     $('picRemove').style.display = pics.length ? '' : 'none';
-    $('picNote').textContent = state.picture !== 'photo'
+    $('picNote').textContent = state.picture === 'scene'
+      ? 'Built-in scene: ' + (SCENES[state.sceneIdx] ? SCENES[state.sceneIdx].label : '') + '.'
+      : state.picture !== 'photo'
       ? 'Built-in shapes.'
       : (pics.length
           ? 'Your picture, ' + (state.tones ? state.tones + ' tones.' : 'full greyscale.')
           : 'Add a picture first — using shapes until you do.');
   }
 
+  /* Static content — SCENES never changes at runtime — but the 'on' mark
+     still needs a repaint whenever the active scene changes, so this rides
+     the same reload/init calls paintGallery() does. */
+  function paintSceneGallery(){
+    const box = $('sceneGallery');
+    box.innerHTML = '';
+    SCENES.forEach((sc, i) => {
+      const b = document.createElement('button');
+      b.className = 'thumb' + (i === state.sceneIdx ? ' on' : '');
+      b.dataset.i = String(i);
+      b.setAttribute('aria-label', sc.label);
+      b.innerHTML = '<img src="' + sceneSrc(i) + '" alt="' + sc.label + '">';
+      box.appendChild(b);
+    });
+  }
+
   function reloadPicture(){
-    analyzePicture(() => { syncInkInputs(); paintGallery(); paint(); newRound(); });
+    analyzePicture(() => { syncInkInputs(); paintGallery(); paintSceneGallery(); paint(); newRound(); });
   }
 
   /* He picks the shape for the round instead of it being rolled for him.
@@ -2409,6 +2507,14 @@
     if (!b) return;
     state.picIdx = Number(b.dataset.i);
     state.picture = 'photo';
+    persist(); reloadPicture();
+  });
+
+  $('sceneGallery').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    state.sceneIdx = Number(b.dataset.i);
+    state.picture = 'scene';
     persist(); reloadPicture();
   });
 
@@ -2565,11 +2671,14 @@
   keepAwake();
   syncInkInputs();
   paintGallery();
+  paintSceneGallery();
   paint();
   newRound();
-  /* Decoding the stored picture is async, so the first board is drawn from
-     shapes and swapped once the luminance map is ready. */
+  /* Decoding the stored picture (or rasterising a scene) is async, so the
+     first board is drawn from shapes and swapped once the luminance map is
+     ready. */
   if (state.picture === 'photo' && pics.length) reloadPicture();
+  else if (state.picture === 'scene') reloadPicture();
   /* Escape hatch: whatever else is broken, this always opens the sheet. */
   if (location.hash === '#settings') openPanel();
 })();

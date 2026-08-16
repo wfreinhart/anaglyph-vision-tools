@@ -23,7 +23,7 @@ TARGETS = {
     'puzzle.html': {
         'needs': ('field', 'modeChips', 'eyeChips', 'pairChips', 'blueRange', 'redRange',
                   'gear', 'statLine', 'picChips', 'toneChips', 'picGallery', 'contrastRange',
-                  'dockPieces', 'dockFusion', 'dockShapes', 'holesMove', 'packChips'),
+                  'dockPieces', 'dockFusion', 'dockShapes', 'holesMove', 'packChips', 'sceneGallery'),
         'storage': 'store',
     },
 }
