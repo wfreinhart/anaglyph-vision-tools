@@ -252,6 +252,27 @@
   }
   .step.on{background:var(--chrome-ink); color:var(--bg); border-color:var(--chrome-ink);}
 
+  /* Shape picker: he chooses which shape the round uses instead of the game
+     rolling one. Scrolls sideways rather than wrapping — "Everything" is 14
+     shapes deep and the dock has to stay one line tall. */
+  #dockShapes{
+    max-width:44vw; overflow-x:auto; overflow-y:hidden;
+    -webkit-overflow-scrolling:touch; touch-action:pan-x;
+    scrollbar-width:none;
+  }
+  #dockShapes::-webkit-scrollbar{display:none;}
+  .shapeChip{
+    width:27px; height:27px; padding:4px; flex:0 0 auto;
+    border-radius:8px; border:1px solid rgba(128,128,128,.55);
+    background:transparent; color:var(--chrome-ink); cursor:pointer;
+  }
+  .shapeChip svg{width:100%; height:100%; display:block; fill:currentColor;}
+  .shapeChip.on{box-shadow:0 0 0 2px var(--bg), 0 0 0 4px var(--chrome-ink);}
+  .shapeChip.rnd{
+    display:grid; place-items:center; font-size:14px; font-weight:700;
+  }
+  .dock-group.hide, .dock-rule.hide{display:none;}
+
   #burst{position:fixed; inset:0; z-index:7; pointer-events:none; overflow:hidden;}
   #burst span{
     position:absolute; display:block;
@@ -445,6 +466,11 @@
         <button class="step on" data-fusion="0">Off</button>
         <button class="step" data-fusion="1">On</button>
       </div>
+    </div>
+    <div class="dock-rule" id="dockShapeRule"></div>
+    <div class="dock-group" id="dockShapeGroup">
+      <span class="dock-cap">Shape</span>
+      <div class="dock-set" id="dockShapes"></div>
     </div>
   </div>
 </div>
@@ -691,6 +717,31 @@
   const GAME_KEY  = 'anaglyph.puzzle.v1';
   const LOG_KEY   = 'anaglyph.log.v1';
 
+  /* ---------- the shapes ----------
+     Solid silhouettes only. A three year old reads a filled outline far
+     faster than a line drawing, and a silhouette carries exactly one
+     color, which is what the optics require. Declared ahead of SCHEMA/state
+     below: sanitize() runs at state-init time and its pinnedShape rule reads
+     SHAPES, so SHAPES must already exist by then, not just by the time
+     shapePool()/svgFor() are first called. */
+  const SHAPES = {
+    circle:   {simple:true,  svg:'<circle cx="50" cy="50" r="45"/>'},
+    square:   {simple:true,  svg:'<rect x="8" y="8" width="84" height="84" rx="12"/>'},
+    triangle: {simple:true,  svg:'<path d="M50 7 93 86H7Z"/>'},
+    star:     {simple:true,  svg:'<path d="M50 5 60.6 35.4 92.8 36.1 67.1 55.6 76.5 86.4 50 68 23.5 86.4 32.9 55.6 7.2 36.1 39.4 35.4Z"/>'},
+    heart:    {simple:true,  svg:'<path d="M50 89C19 67 7 51 7 34A22 22 0 0 1 50 24 22 22 0 0 1 93 34c0 17-12 33-43 55Z"/>'},
+    diamond:  {simple:true,  svg:'<path d="M50 5 92 50 50 95 8 50Z"/>'},
+    hexagon:  {simple:true,  svg:'<path d="M50 6 89 28v44L50 94 11 72V28Z"/>'},
+    cross:    {simple:true,  svg:'<path d="M38 7h24v31h31v24H62v31H38V62H7V38h31Z"/>'},
+    moon:     {simple:false, svg:'<path d="M64 6A45 45 0 1 0 64 94A54 54 0 0 1 64 6Z"/>'},
+    fish:     {simple:false, svg:'<ellipse cx="43" cy="50" rx="35" ry="23"/><path d="M76 50 97 28v44Z"/>'},
+    car:      {simple:false, svg:'<rect x="8" y="52" width="84" height="20" rx="7"/><path d="M25 52 35 30h30l10 22Z"/><circle cx="30" cy="74" r="11"/><circle cx="70" cy="74" r="11"/>'},
+    butterfly:{simple:false, svg:'<ellipse cx="29" cy="33" rx="23" ry="19"/><ellipse cx="71" cy="33" rx="23" ry="19"/><ellipse cx="33" cy="68" rx="19" ry="16"/><ellipse cx="67" cy="68" rx="19" ry="16"/><rect x="46" y="24" width="8" height="54" rx="4"/>'},
+    apple:    {simple:false, svg:'<circle cx="33" cy="58" r="30"/><circle cx="67" cy="58" r="30"/><rect x="46" y="12" width="7" height="26" rx="3.5"/><path d="M53 28c9-11 20-13 27-11-2 9-11 16-27 16Z"/>'},
+    flower:   {simple:false, svg:'<circle cx="50" cy="20" r="17"/><circle cx="76" cy="35" r="17"/><circle cx="76" cy="65" r="17"/><circle cx="50" cy="80" r="17"/><circle cx="24" cy="65" r="17"/><circle cx="24" cy="35" r="17"/><circle cx="50" cy="50" r="16"/>'}
+  };
+  const ALL_SHAPES = Object.keys(SHAPES);
+
   /* Which light each lens lets through. A cyan lens passes green AND blue,
      which is why a cyan-tuned ink behaves differently from a green one. */
   const LENS = {
@@ -717,6 +768,7 @@
     mode:oneOf(['jigsaw','blocks','sort','tap']), pieces:oneOf([2,4,6,9]),
     taps:intIn(1,3), holes:intIn(1,3), shapeSet:oneOf(['simple','all']),
     picture:oneOf(['shapes','photo']), tones:oneOf([0,2,3,4]),
+    pinnedShape: v => v === null || Object.prototype.hasOwnProperty.call(SHAPES, v),
     picBias:intIn(-40,40), picIdx:intIn(0,999),
     size:intIn(8,45), bg:oneOf(['#000000','#ffffff']),
     eyePlan:oneOf(['alt','L','R','both']),
@@ -742,7 +794,7 @@
   }
 
   const state = Object.assign({
-    mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple',
+    mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple', pinnedShape:null,
     picture:'shapes', tones:3, picBias:0, picIdx:0,
     size:22, bg:'#ffffff',
     eyePlan:'alt', mix:false, showTag:false, sound:true, childLock:false, assist:true,
@@ -866,27 +918,6 @@
     return '#00' + hx(w[1] ? 255 : 0) + hx(w[2] > 0 ? 255 : 0);
   }
 
-  /* ---------- the shapes ----------
-     Solid silhouettes only. A three year old reads a filled outline far
-     faster than a line drawing, and a silhouette carries exactly one
-     color, which is what the optics require. */
-  const SHAPES = {
-    circle:   {simple:true,  svg:'<circle cx="50" cy="50" r="45"/>'},
-    square:   {simple:true,  svg:'<rect x="8" y="8" width="84" height="84" rx="12"/>'},
-    triangle: {simple:true,  svg:'<path d="M50 7 93 86H7Z"/>'},
-    star:     {simple:true,  svg:'<path d="M50 5 60.6 35.4 92.8 36.1 67.1 55.6 76.5 86.4 50 68 23.5 86.4 32.9 55.6 7.2 36.1 39.4 35.4Z"/>'},
-    heart:    {simple:true,  svg:'<path d="M50 89C19 67 7 51 7 34A22 22 0 0 1 50 24 22 22 0 0 1 93 34c0 17-12 33-43 55Z"/>'},
-    diamond:  {simple:true,  svg:'<path d="M50 5 92 50 50 95 8 50Z"/>'},
-    hexagon:  {simple:true,  svg:'<path d="M50 6 89 28v44L50 94 11 72V28Z"/>'},
-    cross:    {simple:true,  svg:'<path d="M38 7h24v31h31v24H62v31H38V62H7V38h31Z"/>'},
-    moon:     {simple:false, svg:'<path d="M64 6A45 45 0 1 0 64 94A54 54 0 0 1 64 6Z"/>'},
-    fish:     {simple:false, svg:'<ellipse cx="43" cy="50" rx="35" ry="23"/><path d="M76 50 97 28v44Z"/>'},
-    car:      {simple:false, svg:'<rect x="8" y="52" width="84" height="20" rx="7"/><path d="M25 52 35 30h30l10 22Z"/><circle cx="30" cy="74" r="11"/><circle cx="70" cy="74" r="11"/>'},
-    butterfly:{simple:false, svg:'<ellipse cx="29" cy="33" rx="23" ry="19"/><ellipse cx="71" cy="33" rx="23" ry="19"/><ellipse cx="33" cy="68" rx="19" ry="16"/><ellipse cx="67" cy="68" rx="19" ry="16"/><rect x="46" y="24" width="8" height="54" rx="4"/>'},
-    apple:    {simple:false, svg:'<circle cx="33" cy="58" r="30"/><circle cx="67" cy="58" r="30"/><rect x="46" y="12" width="7" height="26" rx="3.5"/><path d="M53 28c9-11 20-13 27-11-2 9-11 16-27 16Z"/>'},
-    flower:   {simple:false, svg:'<circle cx="50" cy="20" r="17"/><circle cx="76" cy="35" r="17"/><circle cx="76" cy="65" r="17"/><circle cx="50" cy="80" r="17"/><circle cx="24" cy="65" r="17"/><circle cx="24" cy="35" r="17"/><circle cx="50" cy="50" r="16"/>'}
-  };
-  const ALL_SHAPES = Object.keys(SHAPES);
   function shapePool(){
     return state.shapeSet === 'simple' ? ALL_SHAPES.filter(k => SHAPES[k].simple) : ALL_SHAPES;
   }
@@ -929,7 +960,7 @@
 
   /* The dock covers the bottom strip; layout has to keep clear of it or tray
      pieces and targets slide underneath and cannot be picked up. */
-  function dockShown(){ return !state.childLock && state.mode !== 'tap'; }
+  function dockShown(){ return !state.childLock; }
   function bottomClear(){ return dockShown() ? 104 : 12; }
 
   function sizePx(){
@@ -1006,14 +1037,23 @@
     return eye === 'L' ? 'R' : (eye === 'R' ? 'L' : 'both');
   }
 
-  function pickShapes(n){
+  /* Picks n shapes for a round, one of which is the goal. When he has
+     pinned a shape in the dock, that shape IS the goal — never a decoy —
+     rather than just another equally-likely draw, so picking it actually
+     picks the round. Everything else keeps the old random-without-repeats
+     behaviour. */
+  function pickShapes(n, pinned){
     const pool = shapePool().slice();
+    const winner = Math.floor(Math.random() * n);
+    const usePinned = !!pinned && pool.indexOf(pinned) >= 0;
+    if (usePinned) pool.splice(pool.indexOf(pinned), 1);
     const out = [];
-    for (let i = 0; i < n && pool.length; i++){
-      out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    for (let i = 0; i < n; i++){
+      if (i === winner && usePinned){ out.push(pinned); continue; }
+      if (pool.length){ out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]); }
+      else out.push(usePinned ? pinned : (out[0] || pinned));
     }
-    while (out.length < n) out.push(out[0]);
-    return out;
+    return { shapes: out, winner: winner };
   }
 
   function newRound(){
@@ -1586,7 +1626,7 @@
     const cw = L.side / cols, ch = L.side / rows;
     const pic = usePicture() ? layers() : null;
     picThumb = pic ? pic.both : null;
-    state.goal = pic ? null : pickShapes(1)[0];
+    state.goal = pic ? null : pickShapes(1, state.pinnedShape).shapes[0];
     jig = { total: cols * rows, placed: 0 };
 
     /* Decide eyes first: in fusion mode a cell's ghost is inked for the
@@ -1633,9 +1673,9 @@
 
   function buildTap(){
     const n = Math.max(1, Math.min(3, state.taps));
-    const shapes = pickShapes(n);
+    const picked = pickShapes(n, state.pinnedShape);
+    const shapes = picked.shapes, winner = picked.winner;
     const spots = place(n);
-    const winner = Math.floor(Math.random() * n);
     state.goal = shapes[winner];
 
     shapes.forEach((shape, i) => {
@@ -1648,9 +1688,9 @@
 
   function buildSort(){
     const n = Math.max(1, Math.min(3, state.holes));
-    const shapes = pickShapes(n);
+    const picked = pickShapes(n, state.pinnedShape);
+    const shapes = picked.shapes, winner = picked.winner;
     const spots = place(n + 1);
-    const winner = Math.floor(Math.random() * n);
     state.goal = shapes[winner];
 
     /* Fusion: the holes go to the eye that is NOT holding the piece, so he
@@ -2047,7 +2087,13 @@
     mark('#dockPieces .step', 'n', String(state.pieces));
     mark('#dockBgs .dot', 'bg', state.bg);
     mark('#dockFusion .step', 'fusion', state.fusion ? '1' : '0');
-    $('dock').classList.toggle('gone', !!state.childLock || state.mode === 'tap');
+    $('dock').classList.toggle('gone', !!state.childLock);
+
+    const shapeRelevant = state.mode === 'sort' || state.mode === 'tap' ||
+                          (state.mode === 'jigsaw' && state.picture !== 'photo');
+    $('dockShapeGroup').classList.toggle('hide', !shapeRelevant);
+    $('dockShapeRule').classList.toggle('hide', !shapeRelevant);
+    if (shapeRelevant) renderShapeDock();
 
     paintNotice();
     paintPreview(); paintLeak(); paintStats(); paintHud();
@@ -2066,7 +2112,7 @@
   function persist(){
     store.set(GAME_KEY, {
       mode:state.mode, pieces:state.pieces, taps:state.taps, holes:state.holes,
-      shapeSet:state.shapeSet, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
+      shapeSet:state.shapeSet, pinnedShape:state.pinnedShape, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
       mix:state.mix, showTag:state.showTag, sound:state.sound, childLock:state.childLock,
       assist:state.assist, fusion:state.fusion,
       picture:state.picture, tones:state.tones, picBias:state.picBias, picIdx:state.picIdx
@@ -2113,6 +2159,7 @@
   group('dockPieces', btn => { state.pieces = Number(btn.dataset.n); });
   group('dockBgs',    btn => { state.bg = btn.dataset.bg; calibBg = state.bg; });
   group('dockFusion', btn => { state.fusion = btn.dataset.fusion === '1'; });
+  group('dockShapes', btn => { state.pinnedShape = btn.dataset.shape || null; });
   group('toneChips',  btn => { state.tones = Number(btn.dataset.tones); });
   group('bgChips',    btn => { state.bg = btn.dataset.bg; calibBg = state.bg; });
   group('eyeChips',   btn => { state.eyePlan = btn.dataset.eye; state.round = 0; });
@@ -2193,6 +2240,28 @@
 
   function reloadPicture(){
     analyzePicture(() => { syncInkInputs(); paintGallery(); paint(); newRound(); });
+  }
+
+  /* He picks the shape for the round instead of it being rolled for him.
+     Rebuilt from scratch each paint() since the pool changes with the shape
+     set — cheap at up to 14 buttons, and it keeps the 'on' mark trivial. */
+  function renderShapeDock(){
+    const box = $('dockShapes');
+    box.innerHTML = '';
+    const rnd = document.createElement('button');
+    rnd.className = 'shapeChip rnd' + (state.pinnedShape ? '' : ' on');
+    rnd.dataset.shape = '';
+    rnd.setAttribute('aria-label', 'Random shape');
+    rnd.textContent = '?';
+    box.appendChild(rnd);
+    shapePool().forEach(shape => {
+      const b = document.createElement('button');
+      b.className = 'shapeChip' + (state.pinnedShape === shape ? ' on' : '');
+      b.dataset.shape = shape;
+      b.setAttribute('aria-label', shape);
+      b.innerHTML = svgFor(shape);
+      box.appendChild(b);
+    });
   }
 
   $('picGallery').addEventListener('click', e => {
