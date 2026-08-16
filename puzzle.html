@@ -453,14 +453,6 @@
     </div>
     <div class="dock-rule"></div>
     <div class="dock-group">
-      <span class="dock-cap">Field</span>
-      <div class="dock-set" id="dockBgs">
-        <button class="dot" data-bg="#000000" style="background:#000000" aria-label="Black background"></button>
-        <button class="dot on" data-bg="#ffffff" style="background:#ffffff" aria-label="White background"></button>
-      </div>
-    </div>
-    <div class="dock-rule"></div>
-    <div class="dock-group">
       <span class="dock-cap">Both eyes</span>
       <div class="dock-set" id="dockFusion">
         <button class="step on" data-fusion="0">Off</button>
@@ -538,6 +530,11 @@
     </div>
   </div>
 
+  <div class="row hide" id="moveRow">
+    <div class="label">Holes move<span class="sub">They drift around and bounce off each other and the walls — he has to catch the hole with the piece. Turn off if he stalls.</span></div>
+    <button id="holesMove" class="toggle on" role="switch" aria-checked="true" aria-label="Holes move"></button>
+  </div>
+
   <div class="row">
     <div>
       <div class="label">Shape set</div>
@@ -571,6 +568,8 @@
     </div>
     <label class="sub" for="biasRange">Ink balance <b id="biasVal">0</b><span class="sub">More ink to the right.</span></label>
     <input id="biasRange" type="range" min="-40" max="40" value="0" aria-label="Ink balance" />
+    <label class="sub" for="contrastRange">Contrast <b id="contrastVal">45</b><span class="sub">Pushes middling tones apart so the picture reads clearer. Higher to the right.</span></label>
+    <input id="contrastRange" type="range" min="0" max="100" value="45" aria-label="Contrast" />
   </div>
 
   <div class="row stack" id="sizeRow">
@@ -579,17 +578,6 @@
       <div class="label">Shape size<span class="sub" id="sizeNote">22% of the short side</span></div>
     </div>
     <input id="sizeRange" type="range" min="8" max="45" step="1" value="22" aria-label="Shape size" />
-  </div>
-
-  <div class="row">
-    <div>
-      <span class="eyebrow">Field</span>
-      <div class="label">Background<span class="sub">On white the inks swap over. Both work.</span></div>
-    </div>
-    <div class="chips" id="bgChips">
-      <button class="chip" data-bg="#000000">Black</button>
-      <button class="chip on" data-bg="#ffffff">White</button>
-    </div>
   </div>
 
   <div class="row">
@@ -769,11 +757,14 @@
     taps:intIn(1,3), holes:intIn(1,3), shapeSet:oneOf(['simple','all']),
     picture:oneOf(['shapes','photo']), tones:oneOf([0,2,3,4]),
     pinnedShape: v => v === null || Object.prototype.hasOwnProperty.call(SHAPES, v),
-    picBias:intIn(-40,40), picIdx:intIn(0,999),
-    size:intIn(8,45), bg:oneOf(['#000000','#ffffff']),
+    picBias:intIn(-40,40), picContrast:intIn(0,100), picIdx:intIn(0,999),
+    /* Black field dropped: it let both eyes read the target too easily and
+       defeated the split. White only, so a stored black from before this
+       change quietly falls back to the default instead of reviving it. */
+    size:intIn(8,45), bg:oneOf(['#ffffff']),
     eyePlan:oneOf(['alt','L','R','both']),
     mix:isBool, showTag:isBool, sound:isBool, childLock:isBool,
-    assist:isBool, fusion:isBool,
+    assist:isBool, fusion:isBool, holesMove:isBool,
     red:isHex, green:isHex, redSide:oneOf(['L','R']),
     pair:v => Object.prototype.hasOwnProperty.call(LENS, v),
     bluePass:numIn(0,1), redBlue:numIn(0,1)
@@ -795,10 +786,10 @@
 
   const state = Object.assign({
     mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple', pinnedShape:null,
-    picture:'shapes', tones:3, picBias:0, picIdx:0,
+    picture:'shapes', tones:3, picBias:0, picContrast:45, picIdx:0,
     size:22, bg:'#ffffff',
     eyePlan:'alt', mix:false, showTag:false, sound:true, childLock:false, assist:true,
-    fusion:false,
+    fusion:false, holesMove:true,
     red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0, redBlue:0, redSide:'L',
     hits:0, misses:0, round:0, curEye:'L', goal:null, t0:0
   }, sanitize(store.get(CALIB_KEY, {})), sanitize(store.get(GAME_KEY, {})));
@@ -1057,6 +1048,7 @@
   }
 
   function newRound(){
+    stopHoleAnim();
     field.innerHTML = '';
     jigCells = [];
     state.curEye = nextEye();
@@ -1213,7 +1205,15 @@
   function toneAt(v){
     const bias = (state.picBias || 0) / 100;
     if (state.tones === 2) return v < picOtsu + bias * 255 ? 1 : 0;
-    const x = Math.max(0, Math.min(1, 1 - v / 255 + bias));
+    let x = Math.max(0, Math.min(1, 1 - v / 255 + bias));
+    /* Contrast: steepen the ramp around its midpoint so an ordinary photo's
+       midtones land closer to full ink or full field instead of sitting as
+       a wan 50% blend. Safe to push hard — every point on the field<->ink
+       ramp carries the same wrong-eye leak ratio (see rampInk), so a
+       higher-contrast tone is exactly as selective as a faint one, just
+       easier to actually see. */
+    const k = 1 + (state.picContrast || 0) / 100 * 3;
+    x = Math.max(0, Math.min(1, 0.5 + (x - 0.5) * k));
     return state.tones ? Math.round(x * (state.tones - 1)) / (state.tones - 1) : x;
   }
 
@@ -1237,7 +1237,7 @@
   }
 
   function layers(){
-    const key = [state.picIdx, state.tones, state.picBias, state.bg, state.red,
+    const key = [state.picIdx, state.tones, state.picBias, state.picContrast, state.bg, state.red,
                  state.green, state.pair, state.bluePass, state.redBlue,
                  state.redSide].join('|');
     if (layerCache.key !== key){
@@ -1708,6 +1708,75 @@
     const piece = makeThing(state.goal, inkFor(state.curEye), 'piece', spots[n]);
     piece.dataset.home = JSON.stringify(spots[n]);
     piece.addEventListener('pointerdown', onGrab);
+
+    if (state.holesMove) startHoleAnim();
+  }
+
+  /* ---------- moving holes ----------
+     Pinball, not a random jitter: each hole is a body with a velocity, it
+     reflects off the play bounds and off the other holes, and it keeps
+     moving even while he is mid-drag with the piece — catching it is the
+     whole point. Positions are written to left/top every frame, same as a
+     settled piece, so onDrop's live centerOf() reads just work with no
+     changes: the hole's hit box at the moment of drop IS wherever it
+     currently is on screen. */
+  let holeAnimId = null, holeBodies = [], holeLastT = null;
+
+  function stopHoleAnim(){
+    if (holeAnimId) cancelAnimationFrame(holeAnimId);
+    holeAnimId = null; holeBodies = []; holeLastT = null;
+  }
+
+  function startHoleAnim(){
+    stopHoleAnim();
+    const r = sizePx() / 2;
+    holeBodies = [...field.querySelectorAll('.hole')].map(el => {
+      const c = centerOf(el), ang = Math.random() * Math.PI * 2;
+      const spd = sizePx() * (1 + Math.random() * 0.8);
+      return { el:el, x:c.x, y:c.y, vx:Math.cos(ang) * spd, vy:Math.sin(ang) * spd, r:r };
+    });
+    if (holeBodies.length) holeAnimId = requestAnimationFrame(stepHoles);
+  }
+
+  function stepHoles(t){
+    if (holeLastT === null) holeLastT = t;
+    const dt = Math.min(0.05, (t - holeLastT) / 1000);
+    holeLastT = t;
+    const b = bounds();
+
+    holeBodies.forEach(o => {
+      o.x += o.vx * dt; o.y += o.vy * dt;
+      if (o.x < b.x0){ o.x = b.x0; o.vx = Math.abs(o.vx); }
+      else if (o.x > b.x1){ o.x = b.x1; o.vx = -Math.abs(o.vx); }
+      if (o.y < b.y0){ o.y = b.y0; o.vy = Math.abs(o.vy); }
+      else if (o.y > b.y1){ o.y = b.y1; o.vy = -Math.abs(o.vy); }
+    });
+
+    for (let i = 0; i < holeBodies.length; i++){
+      for (let j = i + 1; j < holeBodies.length; j++){
+        const a = holeBodies[i], c = holeBodies[j];
+        const dx = c.x - a.x, dy = c.y - a.y;
+        const dist = Math.hypot(dx, dy) || 0.001;
+        const minDist = a.r + c.r;
+        if (dist >= minDist) continue;
+        const nx = dx / dist, ny = dy / dist;
+        const overlap = (minDist - dist) / 2;
+        a.x -= nx * overlap; a.y -= ny * overlap;
+        c.x += nx * overlap; c.y += ny * overlap;
+        const rel = (c.vx - a.vx) * nx + (c.vy - a.vy) * ny;
+        if (rel < 0){
+          a.vx += rel * nx; a.vy += rel * ny;
+          c.vx -= rel * nx; c.vy -= rel * ny;
+        }
+      }
+    }
+
+    holeBodies.forEach(o => {
+      o.el.style.left = (o.x - sizePx() / 2) + 'px';
+      o.el.style.top  = (o.y - sizePx() / 2) + 'px';
+    });
+
+    holeAnimId = requestAnimationFrame(stepHoles);
   }
 
   /* ---------- interaction ---------- */
@@ -2059,6 +2128,7 @@
     $('picRow').classList.toggle('hide', state.mode !== 'jigsaw');
     $('tapRow').classList.toggle('hide', state.mode !== 'tap');
     $('sortRow').classList.toggle('hide', state.mode !== 'sort');
+    $('moveRow').classList.toggle('hide', state.mode !== 'sort');
     $('sizeRow').classList.toggle('off', gridded);
     $('mixRow').classList.toggle('off', state.mode !== 'tap' || state.taps < 2);
     $('assistRow').classList.toggle('off', state.mode !== 'blocks');
@@ -2085,7 +2155,6 @@
 
     /* Dock and panel are peers — both marked from here, never separately. */
     mark('#dockPieces .step', 'n', String(state.pieces));
-    mark('#dockBgs .dot', 'bg', state.bg);
     mark('#dockFusion .step', 'fusion', state.fusion ? '1' : '0');
     $('dock').classList.toggle('gone', !!state.childLock);
 
@@ -2114,8 +2183,8 @@
       mode:state.mode, pieces:state.pieces, taps:state.taps, holes:state.holes,
       shapeSet:state.shapeSet, pinnedShape:state.pinnedShape, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
       mix:state.mix, showTag:state.showTag, sound:state.sound, childLock:state.childLock,
-      assist:state.assist, fusion:state.fusion,
-      picture:state.picture, tones:state.tones, picBias:state.picBias, picIdx:state.picIdx
+      assist:state.assist, fusion:state.fusion, holesMove:state.holesMove,
+      picture:state.picture, tones:state.tones, picBias:state.picBias, picContrast:state.picContrast, picIdx:state.picIdx
     });
     store.set(CALIB_KEY, {
       red:state.red, green:state.green, pair:state.pair,
@@ -2157,11 +2226,9 @@
   group('shapeChips', btn => { state.shapeSet = btn.dataset.set; });
   group('picChips',   btn => { state.picture = btn.dataset.pic; });
   group('dockPieces', btn => { state.pieces = Number(btn.dataset.n); });
-  group('dockBgs',    btn => { state.bg = btn.dataset.bg; calibBg = state.bg; });
   group('dockFusion', btn => { state.fusion = btn.dataset.fusion === '1'; });
   group('dockShapes', btn => { state.pinnedShape = btn.dataset.shape || null; });
   group('toneChips',  btn => { state.tones = Number(btn.dataset.tones); });
-  group('bgChips',    btn => { state.bg = btn.dataset.bg; calibBg = state.bg; });
   group('eyeChips',   btn => { state.eyePlan = btn.dataset.eye; state.round = 0; });
   group('lensChips',  btn => { state.redSide = btn.dataset.red; });
   group('pairChips',  btn => {
@@ -2177,6 +2244,7 @@
   toggle('childLock', 'childLock', () => { paint(); newRound(); });
   toggle('assist', 'assist');
   toggle('fusion', 'fusion', () => { paint(); newRound(); });
+  toggle('holesMove', 'holesMove', () => { paint(); newRound(); });
 
   /* Also the load-time sync: settings restored from storage have to show up
      on the controls, or the sheet lies about what the game is doing. */
@@ -2192,16 +2260,17 @@
     mark('#lensChips .chip', 'red', state.redSide);
     mark('#modeChips .chip', 'mode', state.mode);
     mark('#shapeChips .chip', 'set', state.shapeSet);
-    mark('#bgChips .chip', 'bg', state.bg);
     mark('#pieceChips .chip', 'n', String(state.pieces));
     mark('#picChips .chip', 'pic', state.picture);
     mark('#toneChips .chip', 'tones', String(state.tones));
     $('biasRange').value = state.picBias || 0;
     $('biasVal').textContent = state.picBias || 0;
+    $('contrastRange').value = state.picContrast;
+    $('contrastVal').textContent = state.picContrast;
     mark('#tapChips .chip', 'n', String(state.taps));
     mark('#holeChips .chip', 'n', String(state.holes));
     [['mixEyes','mix'], ['showTag','showTag'], ['sound','sound'], ['childLock','childLock'],
-     ['assist','assist'], ['fusion','fusion']]
+     ['assist','assist'], ['fusion','fusion'], ['holesMove','holesMove']]
       .forEach(([id, key]) => {
         $(id).classList.toggle('on', !!state[key]);
         $(id).setAttribute('aria-checked', String(!!state[key]));
@@ -2312,6 +2381,12 @@
     $('biasVal').textContent = state.picBias;
   });
   $('biasRange').addEventListener('change', () => { persist(); paint(); newRound(); });
+
+  $('contrastRange').addEventListener('input', () => {
+    state.picContrast = Number($('contrastRange').value);
+    $('contrastVal').textContent = state.picContrast;
+  });
+  $('contrastRange').addEventListener('change', () => { persist(); paint(); newRound(); });
 
   $('redRange').addEventListener('input', () => {
     state.redBlue = Number($('redRange').value) / 100;
