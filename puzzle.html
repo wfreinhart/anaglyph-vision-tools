@@ -88,6 +88,9 @@
     border-radius:15%; box-shadow:inset 0 0 0 2px var(--bg);
   }
   .wall{opacity:.32; pointer-events:none;}
+  /* Row-clear bonus (Blocks mode): a flash-then-shrink, distinct from .pop
+     so it never picks up .pop's shape-match pointer-events semantics. */
+  .rowclear{animation:rowclear .4s ease forwards; pointer-events:none;}
   /* One hole is outlined as a single region, not as loose cells: borders on
      the shared edges inside a region are suppressed, so a T-shaped gap
      actually looks like a T. Without this a three year old has to work out
@@ -124,6 +127,11 @@
     0%{transform:scale(1); opacity:1;}
     40%{transform:scale(1.22); opacity:1;}
     100%{transform:scale(.55); opacity:0;}
+  }
+  @keyframes rowclear{
+    0%{transform:scale(1); opacity:1; filter:brightness(1);}
+    35%{transform:scale(1.18); opacity:1; filter:brightness(1.7);}
+    100%{transform:scale(.2); opacity:0; filter:brightness(1.7);}
   }
   @keyframes shake{
     0%,100%{transform:translateX(0);}
@@ -416,7 +424,7 @@
   }
   @media (prefers-reduced-motion:reduce){
     #panel,#scrim{transition:none;}
-    .thing.pop,.thing.shake,#burst span{animation:none;}
+    .thing.pop,.thing.shake,#burst span,.rowclear{animation:none;}
   }
 </style>
 </head>
@@ -533,6 +541,11 @@
   <div class="row hide" id="moveRow">
     <div class="label">Holes move<span class="sub">They drift around and bounce off each other and the walls — he has to catch the hole with the piece. Turn off if he stalls.</span></div>
     <button id="holesMove" class="toggle on" role="switch" aria-checked="true" aria-label="Holes move"></button>
+  </div>
+
+  <div class="row hide" id="rowClearRow">
+    <div class="label">Rows clear<span class="sub">A full row across the wall flashes and clears as a bonus. Turn off if it's distracting.</span></div>
+    <button id="rowClears" class="toggle on" role="switch" aria-checked="true" aria-label="Rows clear"></button>
   </div>
 
   <div class="row stack" id="packRow">
@@ -875,7 +888,7 @@
     size:intIn(8,45), bg:oneOf(['#ffffff']),
     eyePlan:oneOf(['alt','L','R','both']),
     mix:isBool, showTag:isBool, sound:isBool, childLock:isBool,
-    assist:isBool, fusion:isBool, holesMove:isBool,
+    assist:isBool, fusion:isBool, holesMove:isBool, rowClears:isBool,
     red:isHex, green:isHex, redSide:oneOf(['L','R']),
     pair:v => Object.prototype.hasOwnProperty.call(LENS, v),
     bluePass:numIn(0,1), redBlue:numIn(0,1)
@@ -900,7 +913,7 @@
     picture:'shapes', tones:3, picBias:0, picContrast:45, picIdx:0, sceneIdx:0,
     size:22, bg:'#ffffff',
     eyePlan:'alt', mix:false, showTag:false, sound:true, childLock:false, assist:true,
-    fusion:false, holesMove:true,
+    fusion:false, holesMove:true, rowClears:true,
     red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0, redBlue:0, redSide:'L',
     hits:0, misses:0, round:0, curEye:'L', goal:null, t0:0
   }, sanitize(store.get(CALIB_KEY, {})), sanitize(store.get(GAME_KEY, {})));
@@ -1522,7 +1535,7 @@
     const ox = L.bx + (L.side - dim * cs) / 2;
     const oy = L.by + (L.side - dim * cs) / 2;
     tet = { grid:grid, dim:dim, cs:cs, ox:ox, oy:oy,
-            total:chosen.length, placed:0, regions:[] };
+            total:chosen.length, placed:0, regions:[], clearedRows:new Set() };
 
     /* Fusion mode only: blocks sit ~70% of the cell so the cue outline has a
        clear margin and never paints over them. Cue widths are clamped to that
@@ -1586,6 +1599,8 @@
         const w = blockEl([[0,0]], { c0:0, r0:0, w:1, h:1 }, cs, bothInk, 'wall', inset);
         w.style.left = (ox + c * cs) + 'px';
         w.style.top  = (oy + r * cs) + 'px';
+        w.dataset.row = String(r);
+        w.dataset.col = String(c);
       }
     }
     if (state.fusion) addFrame(ox, oy, dim * cs, dim * cs, bothInk);
@@ -1707,11 +1722,21 @@
       el.classList.add('locked');
       moveTo(el, tet.ox + (gx + bb.w/2) * cs, tet.oy + (gy + bb.h/2) * cs, true);
 
+      /* Tag each sub-block with the absolute cell it just landed on, in the
+         same order `at` was built from `cells` — so a completed row can find
+         every block that belongs to it later, wall or piece alike. */
+      const subEls = el.querySelectorAll('i');
+      at.forEach((p, i) => {
+        if (subEls[i]){ subEls[i].dataset.row = String(p[1]); subEls[i].dataset.col = String(p[0]); }
+      });
+
       state.hits += 1;
       tet.placed += 1; jig.placed = tet.placed;
       record(el.dataset.eye || state.curEye, true, performance.now() - state.t0);
       state.t0 = performance.now();
       sayYes(); buzz(12); paintHud();
+
+      if (state.rowClears) clearCompleteRows();
 
       if (tet.placed >= tet.total){
         celebrate({ x: tet.ox + tet.dim * cs / 2, y: tet.oy + tet.dim * cs / 2 });
@@ -1724,6 +1749,33 @@
     if (onGrid) stumble(el);
     shrinkPiece(el);
     goHome(el, home);
+  }
+
+  /* Bonus only, never progress: the round's "N to go" is placed holes, full
+     stop, so this never touches `tet.placed`/`jig.placed`. Rows clear in
+     place — nothing above shifts down. Shifting would renumber every still-
+     open region's absolute cells and break the exact-cell match `dropBlock`
+     relies on for its "solvable by construction" guarantee, for a bonus
+     that isn't worth that risk. */
+  function clearCompleteRows(){
+    for (let r = 0; r < tet.dim; r++){
+      if (tet.clearedRows.has(r)) continue;
+      if (!tet.grid[r].every(v => v !== 0)) continue;
+      /* A row carved with no gap at all (grid.every 1, no 2s) was never a
+         hole he filled — skip it, or a wall-only row would "clear" on his
+         very first placement anywhere on the board, unearned. */
+      if (!tet.grid[r].includes(2)) continue;
+      tet.clearedRows.add(r);
+
+      const els = [...field.querySelectorAll('[data-row="' + r + '"]')];
+      els.forEach(el2 => { el2.classList.remove('rowclear'); void el2.offsetWidth; el2.classList.add('rowclear'); });
+      setTimeout(() => els.forEach(el2 => el2.remove()), 420);
+
+      state.hits += 1;
+      celebrate({ x: tet.ox + tet.dim * tet.cs / 2, y: tet.oy + (r + 0.5) * tet.cs });
+      buzz(20);
+      paintHud();
+    }
   }
 
   /* Picking a piece up lights every hole it would fit. The therapy here is
@@ -2250,6 +2302,7 @@
     $('tapRow').classList.toggle('hide', state.mode !== 'tap');
     $('sortRow').classList.toggle('hide', state.mode !== 'sort');
     $('moveRow').classList.toggle('hide', state.mode !== 'sort');
+    $('rowClearRow').classList.toggle('hide', state.mode !== 'blocks');
     $('sizeRow').classList.toggle('off', gridded);
     $('mixRow').classList.toggle('off', state.mode !== 'tap' || state.taps < 2);
     $('assistRow').classList.toggle('off', state.mode !== 'blocks');
@@ -2304,7 +2357,7 @@
       mode:state.mode, pieces:state.pieces, taps:state.taps, holes:state.holes,
       shapeSet:state.shapeSet, pinnedShape:state.pinnedShape, packs:state.packs, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
       mix:state.mix, showTag:state.showTag, sound:state.sound, childLock:state.childLock,
-      assist:state.assist, fusion:state.fusion, holesMove:state.holesMove,
+      assist:state.assist, fusion:state.fusion, holesMove:state.holesMove, rowClears:state.rowClears,
       picture:state.picture, tones:state.tones, picBias:state.picBias, picContrast:state.picContrast, picIdx:state.picIdx
     });
     store.set(CALIB_KEY, {
@@ -2394,6 +2447,7 @@
   toggle('assist', 'assist');
   toggle('fusion', 'fusion', () => { paint(); newRound(); });
   toggle('holesMove', 'holesMove', () => { paint(); newRound(); });
+  toggle('rowClears', 'rowClears');
 
   /* Also the load-time sync: settings restored from storage have to show up
      on the controls, or the sheet lies about what the game is doing. */
@@ -2421,7 +2475,7 @@
     mark('#tapChips .chip', 'n', String(state.taps));
     mark('#holeChips .chip', 'n', String(state.holes));
     [['mixEyes','mix'], ['showTag','showTag'], ['sound','sound'], ['childLock','childLock'],
-     ['assist','assist'], ['fusion','fusion'], ['holesMove','holesMove']]
+     ['assist','assist'], ['fusion','fusion'], ['holesMove','holesMove'], ['rowClears','rowClears']]
       .forEach(([id, key]) => {
         $(id).classList.toggle('on', !!state[key]);
         $(id).setAttribute('aria-checked', String(!!state[key]));
