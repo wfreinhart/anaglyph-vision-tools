@@ -535,6 +535,19 @@
     <button id="holesMove" class="toggle on" role="switch" aria-checked="true" aria-label="Holes move"></button>
   </div>
 
+  <div class="row stack" id="packRow">
+    <div>
+      <span class="eyebrow">Shapes</span>
+      <div class="label">Theme packs<span class="sub">Mix in more shapes. At least one stays on.</span></div>
+    </div>
+    <div class="chips" id="packChips">
+      <button class="chip on" data-pack="classic">Classic</button>
+      <button class="chip" data-pack="animals">Animals</button>
+      <button class="chip" data-pack="vehicles">Vehicles</button>
+      <button class="chip" data-pack="food">Food</button>
+    </div>
+  </div>
+
   <div class="row">
     <div>
       <div class="label">Shape set</div>
@@ -713,22 +726,57 @@
      SHAPES, so SHAPES must already exist by then, not just by the time
      shapePool()/svgFor() are first called. */
   const SHAPES = {
-    circle:   {simple:true,  svg:'<circle cx="50" cy="50" r="45"/>'},
-    square:   {simple:true,  svg:'<rect x="8" y="8" width="84" height="84" rx="12"/>'},
-    triangle: {simple:true,  svg:'<path d="M50 7 93 86H7Z"/>'},
-    star:     {simple:true,  svg:'<path d="M50 5 60.6 35.4 92.8 36.1 67.1 55.6 76.5 86.4 50 68 23.5 86.4 32.9 55.6 7.2 36.1 39.4 35.4Z"/>'},
-    heart:    {simple:true,  svg:'<path d="M50 89C19 67 7 51 7 34A22 22 0 0 1 50 24 22 22 0 0 1 93 34c0 17-12 33-43 55Z"/>'},
-    diamond:  {simple:true,  svg:'<path d="M50 5 92 50 50 95 8 50Z"/>'},
-    hexagon:  {simple:true,  svg:'<path d="M50 6 89 28v44L50 94 11 72V28Z"/>'},
-    cross:    {simple:true,  svg:'<path d="M38 7h24v31h31v24H62v31H38V62H7V38h31Z"/>'},
-    moon:     {simple:false, svg:'<path d="M64 6A45 45 0 1 0 64 94A54 54 0 0 1 64 6Z"/>'},
-    fish:     {simple:false, svg:'<ellipse cx="43" cy="50" rx="35" ry="23"/><path d="M76 50 97 28v44Z"/>'},
-    car:      {simple:false, svg:'<rect x="8" y="52" width="84" height="20" rx="7"/><path d="M25 52 35 30h30l10 22Z"/><circle cx="30" cy="74" r="11"/><circle cx="70" cy="74" r="11"/>'},
-    butterfly:{simple:false, svg:'<ellipse cx="29" cy="33" rx="23" ry="19"/><ellipse cx="71" cy="33" rx="23" ry="19"/><ellipse cx="33" cy="68" rx="19" ry="16"/><ellipse cx="67" cy="68" rx="19" ry="16"/><rect x="46" y="24" width="8" height="54" rx="4"/>'},
-    apple:    {simple:false, svg:'<circle cx="33" cy="58" r="30"/><circle cx="67" cy="58" r="30"/><rect x="46" y="12" width="7" height="26" rx="3.5"/><path d="M53 28c9-11 20-13 27-11-2 9-11 16-27 16Z"/>'},
-    flower:   {simple:false, svg:'<circle cx="50" cy="20" r="17"/><circle cx="76" cy="35" r="17"/><circle cx="76" cy="65" r="17"/><circle cx="50" cy="80" r="17"/><circle cx="24" cy="65" r="17"/><circle cx="24" cy="35" r="17"/><circle cx="50" cy="50" r="16"/>'}
+    circle:   {simple:true,  pack:'classic', svg:'<circle cx="50" cy="50" r="45"/>'},
+    square:   {simple:true,  pack:'classic', svg:'<rect x="8" y="8" width="84" height="84" rx="12"/>'},
+    triangle: {simple:true,  pack:'classic', svg:'<path d="M50 7 93 86H7Z"/>'},
+    star:     {simple:true,  pack:'classic', svg:'<path d="M50 5 60.6 35.4 92.8 36.1 67.1 55.6 76.5 86.4 50 68 23.5 86.4 32.9 55.6 7.2 36.1 39.4 35.4Z"/>'},
+    heart:    {simple:true,  pack:'classic', svg:'<path d="M50 89C19 67 7 51 7 34A22 22 0 0 1 50 24 22 22 0 0 1 93 34c0 17-12 33-43 55Z"/>'},
+    diamond:  {simple:true,  pack:'classic', svg:'<path d="M50 5 92 50 50 95 8 50Z"/>'},
+    hexagon:  {simple:true,  pack:'classic', svg:'<path d="M50 6 89 28v44L50 94 11 72V28Z"/>'},
+    cross:    {simple:true,  pack:'classic', svg:'<path d="M38 7h24v31h31v24H62v31H38V62H7V38h31Z"/>'},
+    moon:     {simple:false, pack:'classic', svg:'<path d="M64 6A45 45 0 1 0 64 94A54 54 0 0 1 64 6Z"/>'},
+    fish:     {simple:false, pack:'classic', svg:'<ellipse cx="43" cy="50" rx="35" ry="23"/><path d="M76 50 97 28v44Z"/>'},
+    car:      {simple:false, pack:'classic', svg:'<rect x="8" y="52" width="84" height="20" rx="7"/><path d="M25 52 35 30h30l10 22Z"/><circle cx="30" cy="74" r="11"/><circle cx="70" cy="74" r="11"/>'},
+    butterfly:{simple:false, pack:'classic', svg:'<ellipse cx="29" cy="33" rx="23" ry="19"/><ellipse cx="71" cy="33" rx="23" ry="19"/><ellipse cx="33" cy="68" rx="19" ry="16"/><ellipse cx="67" cy="68" rx="19" ry="16"/><rect x="46" y="24" width="8" height="54" rx="4"/>'},
+    apple:    {simple:false, pack:'classic', svg:'<circle cx="33" cy="58" r="30"/><circle cx="67" cy="58" r="30"/><rect x="46" y="12" width="7" height="26" rx="3.5"/><path d="M53 28c9-11 20-13 27-11-2 9-11 16-27 16Z"/>'},
+    flower:   {simple:false, pack:'classic', svg:'<circle cx="50" cy="20" r="17"/><circle cx="76" cy="35" r="17"/><circle cx="76" cy="65" r="17"/><circle cx="50" cy="80" r="17"/><circle cx="24" cy="65" r="17"/><circle cx="24" cy="35" r="17"/><circle cx="50" cy="50" r="16"/>'},
+
+    /* ---------- theme packs ----------
+       Same rule as the classic set: solid single-color silhouettes only, so
+       overlapping primitives are fine (see car/flower/butterfly/apple above)
+       but nothing needs a stroke or a second color to read. */
+    bear:   {simple:true,  pack:'animals', svg:'<circle cx="50" cy="55" r="30"/><circle cx="24" cy="26" r="12"/><circle cx="76" cy="26" r="12"/><circle cx="50" cy="66" r="14"/>'},
+    bunny:  {simple:true,  pack:'animals', svg:'<ellipse cx="50" cy="70" rx="26" ry="22"/><circle cx="50" cy="38" r="18"/><ellipse cx="38" cy="10" rx="7" ry="22" transform="rotate(-12 38 10)"/><ellipse cx="62" cy="10" rx="7" ry="22" transform="rotate(12 62 10)"/>'},
+    duck:   {simple:true,  pack:'animals', svg:'<ellipse cx="45" cy="62" rx="32" ry="24"/><circle cx="70" cy="35" r="17"/><path d="M85 33 100 30 100 42Z"/>'},
+    bird:   {simple:false, pack:'animals', svg:'<ellipse cx="45" cy="55" rx="30" ry="22"/><circle cx="72" cy="35" r="16"/><path d="M85 32 98 38 85 44Z"/><path d="M30 50 5 40 30 62Z"/>'},
+    turtle: {simple:false, pack:'animals', svg:'<ellipse cx="46" cy="55" rx="34" ry="26"/><circle cx="84" cy="50" r="11"/><path d="M12 55 2 48 2 62Z"/><ellipse cx="30" cy="80" rx="8" ry="7"/><ellipse cx="66" cy="80" rx="8" ry="7"/>'},
+    mouse:  {simple:false, pack:'animals', svg:'<circle cx="45" cy="52" r="24"/><circle cx="20" cy="24" r="11"/><circle cx="66" cy="20" r="11"/><path d="M69 55c20 4 30 18 26 30-10-2-22-14-26-30Z"/>'},
+
+    rocket:   {simple:true,  pack:'vehicles', svg:'<path d="M50 4 68 42v34H32V42Z"/><path d="M32 74 12 98 32 90Z"/><path d="M68 74 88 98 68 90Z"/>'},
+    airplane: {simple:true,  pack:'vehicles', svg:'<ellipse cx="50" cy="50" rx="10" ry="46"/><rect x="4" y="42" width="92" height="14" rx="4"/><path d="M38 90h24l-4 10H42Z"/>'},
+    boat:     {simple:true,  pack:'vehicles', svg:'<path d="M10 62h80l-14 24H24Z"/><path d="M52 8 78 60H52Z"/><rect x="48" y="8" width="4" height="52"/>'},
+    train:    {simple:false, pack:'vehicles', svg:'<rect x="8" y="46" width="72" height="30" rx="4"/><rect x="20" y="22" width="30" height="26" rx="4"/><rect x="60" y="30" width="10" height="18" rx="2"/><circle cx="26" cy="82" r="10"/><circle cx="62" cy="82" r="10"/>'},
+    truck:    {simple:false, pack:'vehicles', svg:'<rect x="6" y="40" width="52" height="34" rx="4"/><path d="M58 46h20l14 16v12H58Z"/><circle cx="24" cy="82" r="10"/><circle cx="70" cy="82" r="10"/>'},
+    balloon:  {simple:true,  pack:'vehicles', svg:'<ellipse cx="50" cy="38" rx="34" ry="38"/><rect x="38" y="78" width="24" height="16" rx="3"/><rect x="30" y="76" width="3" height="14"/><rect x="67" y="76" width="3" height="14"/>'},
+
+    icecream:  {simple:true,  pack:'food', svg:'<path d="M32 45h36l-14 50h-8Z"/><circle cx="50" cy="38" r="26"/>'},
+    cupcake:   {simple:true,  pack:'food', svg:'<path d="M22 58h56l-8 34H30Z"/><ellipse cx="50" cy="46" rx="30" ry="22"/><circle cx="50" cy="16" r="7"/>'},
+    pizza:     {simple:false, pack:'food', svg:'<path d="M50 8 92 88H8Z"/><circle cx="50" cy="55" r="7"/><circle cx="35" cy="70" r="6"/><circle cx="65" cy="72" r="6"/>'},
+    watermelon:{simple:true,  pack:'food', svg:'<path d="M50 92 6 22A72 60 0 0 1 94 22Z"/>'},
+    banana:    {simple:true,  pack:'food', svg:'<path d="M22 82A50 50 0 0 1 78 18A60 60 0 0 0 22 82Z"/><circle cx="80" cy="15" r="5"/>'},
+    carrot:    {simple:false, pack:'food', svg:'<path d="M50 8 66 82 34 82Z"/><path d="M40 4 50 14 44 2Z"/><path d="M50 2 58 14 50 4Z"/><path d="M60 4 68 16 56 6Z"/>'}
   };
   const ALL_SHAPES = Object.keys(SHAPES);
+
+  /* Theme packs: which shapes are on offer, grouped by subject. 'classic' is
+     the original set — it stays the sole default so existing saves see no
+     change until a parent opts into more. */
+  const PACKS = [
+    { key:'classic',  label:'Classic' },
+    { key:'animals',  label:'Animals' },
+    { key:'vehicles', label:'Vehicles' },
+    { key:'food',     label:'Food' }
+  ];
 
   /* Which light each lens lets through. A cyan lens passes green AND blue,
      which is why a cyan-tuned ink behaves differently from a green one. */
@@ -757,6 +805,8 @@
     taps:intIn(1,3), holes:intIn(1,3), shapeSet:oneOf(['simple','all']),
     picture:oneOf(['shapes','photo']), tones:oneOf([0,2,3,4]),
     pinnedShape: v => v === null || Object.prototype.hasOwnProperty.call(SHAPES, v),
+    packs: v => Array.isArray(v) && v.length > 0 &&
+                v.every(p => PACKS.some(pk => pk.key === p)),
     picBias:intIn(-40,40), picContrast:intIn(0,100), picIdx:intIn(0,999),
     /* Black field dropped: it let both eyes read the target too easily and
        defeated the split. White only, so a stored black from before this
@@ -785,7 +835,7 @@
   }
 
   const state = Object.assign({
-    mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple', pinnedShape:null,
+    mode:'jigsaw', pieces:4, taps:1, holes:2, shapeSet:'simple', pinnedShape:null, packs:['classic'],
     picture:'shapes', tones:3, picBias:0, picContrast:45, picIdx:0,
     size:22, bg:'#ffffff',
     eyePlan:'alt', mix:false, showTag:false, sound:true, childLock:false, assist:true,
@@ -910,7 +960,13 @@
   }
 
   function shapePool(){
-    return state.shapeSet === 'simple' ? ALL_SHAPES.filter(k => SHAPES[k].simple) : ALL_SHAPES;
+    const byComplexity = state.shapeSet === 'simple' ? ALL_SHAPES.filter(k => SHAPES[k].simple) : ALL_SHAPES;
+    const packs = state.packs && state.packs.length ? state.packs : ['classic'];
+    const byPack = byComplexity.filter(k => packs.indexOf(SHAPES[k].pack) >= 0);
+    /* Never hand back an empty pool — every combination of shipped packs and
+       the simple/everything filter has at least one shape, but a corrupted
+       or future pack list shouldn't be able to stall the game. */
+    return byPack.length ? byPack : byComplexity;
   }
   function svgFor(shape){
     return '<svg viewBox="0 0 100 100" aria-hidden="true">' + SHAPES[shape].svg + '</svg>';
@@ -2181,7 +2237,7 @@
   function persist(){
     store.set(GAME_KEY, {
       mode:state.mode, pieces:state.pieces, taps:state.taps, holes:state.holes,
-      shapeSet:state.shapeSet, pinnedShape:state.pinnedShape, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
+      shapeSet:state.shapeSet, pinnedShape:state.pinnedShape, packs:state.packs, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
       mix:state.mix, showTag:state.showTag, sound:state.sound, childLock:state.childLock,
       assist:state.assist, fusion:state.fusion, holesMove:state.holesMove,
       picture:state.picture, tones:state.tones, picBias:state.picBias, picContrast:state.picContrast, picIdx:state.picIdx
@@ -2224,6 +2280,19 @@
   group('tapChips',   btn => { state.taps = Number(btn.dataset.n); });
   group('holeChips',  btn => { state.holes = Number(btn.dataset.n); });
   group('shapeChips', btn => { state.shapeSet = btn.dataset.set; });
+
+  /* Packs are multi-select — group() is exclusive-select, so this is wired
+     by hand. One pack always has to stay on, or shapePool() has nothing to
+     draw from. */
+  $('packChips').addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn || !$('packChips').contains(btn)) return;
+    const key = btn.dataset.pack, active = state.packs.indexOf(key) >= 0;
+    if (active && state.packs.length === 1) return;
+    state.packs = active ? state.packs.filter(p => p !== key) : state.packs.concat(key);
+    btn.classList.toggle('on', !active);
+    persist(); paint(); newRound();
+  });
   group('picChips',   btn => { state.picture = btn.dataset.pic; });
   group('dockPieces', btn => { state.pieces = Number(btn.dataset.n); });
   group('dockFusion', btn => { state.fusion = btn.dataset.fusion === '1'; });
@@ -2260,6 +2329,8 @@
     mark('#lensChips .chip', 'red', state.redSide);
     mark('#modeChips .chip', 'mode', state.mode);
     mark('#shapeChips .chip', 'set', state.shapeSet);
+    document.querySelectorAll('#packChips .chip').forEach(b =>
+      b.classList.toggle('on', state.packs.indexOf(b.dataset.pack) >= 0));
     mark('#pieceChips .chip', 'n', String(state.pieces));
     mark('#picChips .chip', 'pic', state.picture);
     mark('#toneChips .chip', 'tones', String(state.tones));
