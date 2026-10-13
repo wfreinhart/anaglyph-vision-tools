@@ -317,10 +317,12 @@
     -webkit-overflow-scrolling:touch;
     transform:translateY(102%);
     transition:transform .26s cubic-bezier(.32,.72,0,1);
-    box-shadow:0 -20px 50px rgba(0,0,0,.5);
     touch-action:pan-y;
   }
-  #panel.on{transform:translateY(0);}
+  /* Shadow only while open. Parked off-screen, the sheet's upward shadow
+     bled a grey band across the bottom of the field: binocular paint behind
+     any target dealt near the bottom edge. */
+  #panel.on{transform:translateY(0); box-shadow:0 -20px 50px rgba(0,0,0,.5);}
 
   .grip{width:42px; height:4px; border-radius:999px; background:#3C4A4B; margin:12px auto 16px;}
 
@@ -502,6 +504,7 @@
       <div class="label">What he does<span class="sub" id="modeNote">Build the picture, one piece at a time.</span></div>
     </div>
     <div class="chips" id="modeChips">
+      <button class="chip" data-mode="pop">Pop!</button>
       <button class="chip on" data-mode="jigsaw">Jigsaw</button>
       <button class="chip" data-mode="blocks">Blocks</button>
       <button class="chip" data-mode="sort">Shape sorter</button>
@@ -523,7 +526,7 @@
 
   <div class="row hide" id="tapRow">
     <div>
-      <div class="label">Shapes on screen<span class="sub">More than one means matching the shape in the corner.</span></div>
+      <div class="label">Shapes on screen<span class="sub" id="tapNote">More than one means matching the shape in the corner.</span></div>
     </div>
     <div class="chips" id="tapChips">
       <button class="chip on" data-n="1">1</button>
@@ -565,6 +568,7 @@
       <button class="chip" data-pack="food">Food</button>
       <button class="chip" data-pack="mouseclub">Mouse Club</button>
       <button class="chip" data-pack="spaceknights">Space Knights</button>
+      <button class="chip" data-pack="kingdom">Mushroom Kingdom</button>
     </div>
   </div>
 
@@ -812,7 +816,17 @@
     swordkid:   {simple:false, pack:'spaceknights', svg:'<path d="M10 3c-5 0-7 5-7 10v58h14V13c0-5-2-10-7-10Z"/><rect x="0" y="68" width="24" height="9" rx="4"/><rect x="6" y="74" width="9" height="23" rx="4"/><path d="M34 37C34 20 44 10 59 10c16 0 25 11 25 29v14c0 18-11 29-25 29S34 70 34 52Z"/><path d="M35 35c2-19 12-30 29-30l-4 10c8-4 15-4 23-2l-9 8c8 2 12 6 14 11-13-3-23-3-31 2-7 4-15 5-22 1Z"/><path d="M82 42c9 3 12 10 10 18-2 6-6 8-5 14 1 7 6 10 10 14-8 6-19 1-20-9-1-7 4-11 5-18 1-6-2-11-7-14Z"/><path d="M23 98c4-17 17-25 35-25s32 8 38 25Z"/><ellipse class="d" fill="var(--bg)" cx="50" cy="48" rx="4" ry="6"/><ellipse class="d" fill="var(--bg)" cx="68" cy="48" rx="4" ry="6"/><path class="d" fill="var(--bg)" d="M51 64c6 5 12 5 18 0-2 9-16 9-18 0Z"/>'},
     curlkid:    {simple:true,  pack:'spaceknights', svg:'<circle cx="20" cy="36" r="16"/><circle cx="29" cy="20" r="17"/><circle cx="49" cy="16" r="17"/><circle cx="68" cy="21" r="17"/><circle cx="78" cy="38" r="17"/><circle cx="19" cy="58" r="17"/><circle cx="79" cy="59" r="17"/><ellipse cx="49" cy="45" rx="34" ry="35"/><circle cx="94" cy="43" r="6"/><ellipse cx="49" cy="54" rx="20" ry="25"/><path d="M9 98c5-19 19-28 40-28s36 9 42 28Z"/><ellipse class="d" fill="var(--bg)" cx="42" cy="52" rx="4" ry="6"/><ellipse class="d" fill="var(--bg)" cx="57" cy="52" rx="4" ry="6"/><path class="d" fill="var(--bg)" d="M41 66c6 5 11 5 17 0-2 9-15 9-17 0Z"/>'},
     helmkid:    {simple:false, pack:'spaceknights', svg:'<path d="M43 10V3h18l8 8Z"/><path d="M22 39C22 20 32 9 50 9s28 11 28 30v16H22Z"/><path d="M14 37c0-5 5-8 11-8h50c7 0 11 3 11 8s-4 8-11 8H25c-6 0-11-3-11-8Z"/><path d="M29 40h42v17c0 17-8 27-21 27S29 74 29 57Z"/><path d="M3 98 10 63l25-14 8 35h14l8-35 25 14 7 35Z"/><path d="M10 63 34 49l9 35H25Z"/><path d="M90 63 66 49l-9 35h18Z"/><ellipse class="d" fill="var(--bg)" cx="42" cy="53" rx="4" ry="6"/><ellipse class="d" fill="var(--bg)" cx="58" cy="53" rx="4" ry="6"/><path class="d" fill="var(--bg)" d="M41 68c6 5 12 5 18 0-2 9-16 9-18 0Z"/>'},
-    pilotkid:   {simple:true,  pack:'spaceknights', svg:'<path d="M24 39C24 20 34 9 52 9s29 12 29 31v17H24Z"/><path d="M20 35c0-5 5-8 11-8h48c7 0 11 3 11 8s-4 8-11 8H31c-6 0-11-3-11-8Z"/><circle cx="42" cy="18" r="11"/><circle cx="64" cy="18" r="11"/><rect x="48" y="14" width="10" height="8" rx="3"/><path d="M29 39h48v18c0 18-9 29-24 29S29 75 29 57Z"/><path d="M75 44c9-3 16 2 17 10 7 1 9 8 6 15-4 8-15 16-26 20 6-12 5-20 1-27-4-7-5-14 2-18Z"/><path d="M14 98c5-17 19-25 39-25s34 8 40 25Z"/><circle class="d" fill="var(--bg)" cx="42" cy="18" r="6"/><circle class="d" fill="var(--bg)" cx="64" cy="18" r="6"/><ellipse class="d" fill="var(--bg)" cx="45" cy="54" rx="4" ry="6"/><ellipse class="d" fill="var(--bg)" cx="62" cy="54" rx="4" ry="6"/><path class="d" fill="var(--bg)" d="M45 69c6 5 11 5 17 0-2 9-15 9-17 0Z"/>'}
+    pilotkid:   {simple:true,  pack:'spaceknights', svg:'<path d="M24 39C24 20 34 9 52 9s29 12 29 31v17H24Z"/><path d="M20 35c0-5 5-8 11-8h48c7 0 11 3 11 8s-4 8-11 8H31c-6 0-11-3-11-8Z"/><circle cx="42" cy="18" r="11"/><circle cx="64" cy="18" r="11"/><rect x="48" y="14" width="10" height="8" rx="3"/><path d="M29 39h48v18c0 18-9 29-24 29S29 75 29 57Z"/><path d="M75 44c9-3 16 2 17 10 7 1 9 8 6 15-4 8-15 16-26 20 6-12 5-20 1-27-4-7-5-14 2-18Z"/><path d="M14 98c5-17 19-25 39-25s34 8 40 25Z"/><circle class="d" fill="var(--bg)" cx="42" cy="18" r="6"/><circle class="d" fill="var(--bg)" cx="64" cy="18" r="6"/><ellipse class="d" fill="var(--bg)" cx="45" cy="54" rx="4" ry="6"/><ellipse class="d" fill="var(--bg)" cx="62" cy="54" rx="4" ry="6"/><path class="d" fill="var(--bg)" d="M45 69c6 5 11 5 17 0-2 9-15 9-17 0Z"/>'},
+    /* Mushroom Kingdom: same punched-detail rule as the packs above. The
+       question mark is a field-coloured STROKE, still a hole, not an ink. */
+    mushroom:  {simple:true, pack:'kingdom', svg:'<path d="M8 52C8 26 27 8 50 8s42 18 42 44c0 5-4 8-9 8H17c-5 0-9-3-9-8Z"/><path d="M30 56h40v26c0 9-8 14-20 14S30 91 30 82Z"/><circle class="d" fill="var(--bg)" cx="50" cy="25" r="9"/><circle class="d" fill="var(--bg)" cx="23" cy="42" r="7"/><circle class="d" fill="var(--bg)" cx="77" cy="42" r="7"/><ellipse class="d" fill="var(--bg)" cx="42" cy="73" rx="3.5" ry="6"/><ellipse class="d" fill="var(--bg)" cx="58" cy="73" rx="3.5" ry="6"/>'},
+    superstar: {simple:true, pack:'kingdom', svg:'<path d="M50 5 60.6 35.4 92.8 36.1 67.1 55.6 76.5 86.4 50 68 23.5 86.4 32.9 55.6 7.2 36.1 39.4 35.4Z"/><ellipse class="d" fill="var(--bg)" cx="43" cy="47" rx="3.5" ry="7"/><ellipse class="d" fill="var(--bg)" cx="57" cy="47" rx="3.5" ry="7"/>'},
+    coin:      {simple:true, pack:'kingdom', svg:'<ellipse cx="50" cy="50" rx="30" ry="42"/><rect class="d" fill="var(--bg)" x="45" y="28" width="10" height="44" rx="4"/>'},
+    qblock:    {simple:true, pack:'kingdom', svg:'<rect x="8" y="8" width="84" height="84" rx="10"/><path class="d" fill="none" stroke="var(--bg)" stroke-width="10" stroke-linecap="round" d="M37 38c0-10 6-16 14-16s13 6 13 13c0 9-14 11-14 22"/><circle class="d" fill="var(--bg)" cx="50" cy="76" r="6"/><circle class="d" fill="var(--bg)" cx="18" cy="18" r="3.5"/><circle class="d" fill="var(--bg)" cx="82" cy="18" r="3.5"/><circle class="d" fill="var(--bg)" cx="18" cy="82" r="3.5"/><circle class="d" fill="var(--bg)" cx="82" cy="82" r="3.5"/>'},
+    pipe:      {simple:true, pack:'kingdom', svg:'<rect x="12" y="8" width="76" height="24" rx="4"/><rect x="20" y="30" width="60" height="64"/><rect class="d" fill="var(--bg)" x="20" y="14" width="8" height="12" rx="3"/><rect class="d" fill="var(--bg)" x="28" y="38" width="8" height="50" rx="3"/>'},
+    shell:     {simple:true, pack:'kingdom', svg:'<path d="M10 66C10 36 28 16 50 16s40 20 40 50Z"/><rect x="6" y="62" width="88" height="16" rx="8"/><circle class="d" fill="var(--bg)" cx="50" cy="38" r="8"/><circle class="d" fill="var(--bg)" cx="30" cy="52" r="7"/><circle class="d" fill="var(--bg)" cx="70" cy="52" r="7"/>'},
+    boo:       {simple:true, pack:'kingdom', svg:'<path d="M50 8C27 8 12 26 12 50v40l12-8 13 8 13-8 13 8 13-8 12 8V50C88 26 73 8 50 8Z"/><ellipse class="d" fill="var(--bg)" cx="38" cy="40" rx="5" ry="9"/><ellipse class="d" fill="var(--bg)" cx="62" cy="40" rx="5" ry="9"/><path class="d" fill="var(--bg)" d="M34 58c5 10 27 10 32 0-4 18-28 18-32 0Z"/>'},
+    walker:    {simple:false, pack:'kingdom', svg:'<path d="M10 58C10 30 28 12 50 12s40 18 40 46c0 6-4 9-10 9H20c-6 0-10-3-10-9Z"/><rect x="30" y="60" width="40" height="22" rx="6"/><ellipse cx="30" cy="87" rx="17" ry="9"/><ellipse cx="70" cy="87" rx="17" ry="9"/><ellipse class="d" fill="var(--bg)" cx="40" cy="44" rx="5" ry="8"/><ellipse class="d" fill="var(--bg)" cx="60" cy="44" rx="5" ry="8"/><path class="d" fill="var(--bg)" d="M28 28l18 9-2 4-18-7Z"/><path class="d" fill="var(--bg)" d="M72 28l-18 9 2 4 18-7Z"/>'}
   };
   const ALL_SHAPES = Object.keys(SHAPES);
 
@@ -825,7 +839,8 @@
     { key:'vehicles',     label:'Vehicles' },
     { key:'food',         label:'Food' },
     { key:'mouseclub',    label:'Mouse Club' },
-    { key:'spaceknights', label:'Space Knights' }
+    { key:'spaceknights', label:'Space Knights' },
+    { key:'kingdom',      label:'Mushroom Kingdom' }
   ];
 
   /* ---------- built-in scenes ----------
@@ -909,7 +924,7 @@
   const intIn = (lo, hi) => v => numIn(lo, hi)(v) && v === Math.round(v);
 
   const SCHEMA = {
-    mode:oneOf(['jigsaw','blocks','sort','tap']), pieces:oneOf([2,4,6,9]),
+    mode:oneOf(['pop','jigsaw','blocks','sort','tap']), pieces:oneOf([2,4,6,9]),
     taps:intIn(1,3), holes:intIn(1,3), shapeSet:oneOf(['simple','all']),
     picture:oneOf(['shapes','photo','scene']), tones:oneOf([0,2,3,4]),
     pinnedShape: v => v === null || Object.prototype.hasOwnProperty.call(SHAPES, v),
@@ -1116,7 +1131,10 @@
 
   /* The dock covers the bottom strip; layout has to keep clear of it or tray
      pieces and targets slide underneath and cannot be picked up. */
-  function dockShown(){ return !state.childLock; }
+  /* Pop! keeps the whole field for its moving targets: a bubble rising
+     behind the dock would be partly covered by binocular chrome, which marks
+     its position for the eye that is not meant to see it. */
+  function dockShown(){ return !state.childLock && state.mode !== 'pop'; }
   function bottomClear(){ return dockShown() ? 104 : 12; }
 
   function sizePx(){
@@ -1214,12 +1232,14 @@
 
   function newRound(){
     stopHoleAnim();
+    stopPop();
     field.innerHTML = '';
     jigCells = [];
     state.curEye = nextEye();
     state.round += 1;
 
-    if (state.mode === 'jigsaw') buildJigsaw();
+    if (state.mode === 'pop') buildPop();
+    else if (state.mode === 'jigsaw') buildJigsaw();
     else if (state.mode === 'blocks') buildBlocks();
     else if (state.mode === 'sort') buildSort();
     else buildTap();
@@ -1987,6 +2007,101 @@
     holeAnimId = requestAnimationFrame(stepHoles);
   }
 
+
+  /* ---------- Pop! ----------
+     Characters drift up from the bottom like bubbles and he taps them before
+     they float away. Clinically it is Touch-it with motion: every bubble is
+     one monocular ink, eyes follow nextEye() per bubble (strict L/R under
+     'alt'), there are no decoys and nothing binocular is drawn near a
+     target. The only binocular ink is the every-fifth celebration, after
+     the hit. Positions go to left/top every frame like the moving holes, so
+     the .pop animation's transform does not fight the motion.
+
+     Taps are caught on the field, not the bubble, and go to the nearest
+     bubble within reach: a three-year-old aims at where it WAS, and a
+     moving element's own box is a small, unforgiving target. */
+  let popId = null, popBodies = [], popLastT = null, popSpawnAt = 0;
+
+  function stopPop(){
+    if (popId) cancelAnimationFrame(popId);
+    popId = null; popBodies = []; popLastT = null;
+  }
+
+  function spawnBubble(){
+    const b = bounds(), s = sizePx();
+    const eye = nextEye();
+    state.curEye = eye;
+    state.round += 1;
+    const pool = shapePool();
+    const shape = pool[Math.floor(Math.random() * pool.length)];
+    const x = b.x0 + Math.random() * Math.max(0, b.x1 - b.x0);
+    const el = makeThing(shape, inkFor(eye), 'target bubble', { x:x, y:b.y1 });
+    el.dataset.eye = eye;
+    /* Rise the full height in about seven seconds: slow enough to catch,
+       quick enough that waiting for it is not the game. */
+    const rise = Math.max(1, b.y1 - b.y0);
+    popBodies.push({ el:el, eye:eye, x0:x, x:x, y:b.y1, vy:-rise / 7,
+                     ph:Math.random() * Math.PI * 2, born:performance.now(), s:s });
+    paintHud();
+  }
+
+  function buildPop(){
+    state.goal = null;
+    popSpawnAt = 0;
+    popId = requestAnimationFrame(stepPop);
+  }
+
+  function stepPop(t){
+    if (popLastT === null) popLastT = t;
+    const dt = Math.min(0.05, (t - popLastT) / 1000);
+    popLastT = t;
+    const b = bounds(), want = Math.max(1, Math.min(3, state.taps));
+
+    popBodies = popBodies.filter(o => {
+      if (o.gone) return false;
+      o.y += o.vy * dt;
+      o.ph += dt * 1.6;
+      o.x = Math.max(b.x0, Math.min(b.x1, o.x0 + Math.sin(o.ph) * o.s * 0.35));
+      if (o.y < b.y0){
+        /* Floated away. No score either way: an escape is not a wrong
+           answer, and there is no fail state. */
+        o.el.classList.add('pop');
+        setTimeout(() => o.el.remove(), 360);
+        return false;
+      }
+      o.el.style.left = (o.x - o.s / 2) + 'px';
+      o.el.style.top  = (o.y - o.s / 2) + 'px';
+      return true;
+    });
+
+    /* Stagger arrivals so several on screen never start in a row. */
+    if (popBodies.length < want && t >= popSpawnAt){
+      spawnBubble();
+      popSpawnAt = t + 1400;
+    }
+    popId = requestAnimationFrame(stepPop);
+  }
+
+  function onPopDown(e){
+    if (state.mode !== 'pop' || !popBodies.length) return;
+    let near = null, nearD = Infinity;
+    popBodies.forEach(o => {
+      const d = Math.hypot(e.clientX - o.x, e.clientY - o.y);
+      if (d < nearD){ nearD = d; near = o; }
+    });
+    if (!near || nearD > near.s * 0.75) return;   // bare field is free
+    near.gone = true;
+    near.el.classList.add('pop');
+    setTimeout(() => near.el.remove(), 360);
+    state.hits += 1;
+    record(near.eye, true, performance.now() - near.born);
+    sayYes(); buzz(12);
+    paintHud();
+    if (state.hits % 5 === 0) celebrate({ x:near.x, y:near.y });
+    /* The next one comes quickly after a catch, so the rhythm is his. */
+    popSpawnAt = Math.min(popSpawnAt, performance.now() + 450);
+  }
+
   /* ---------- interaction ---------- */
   function onTap(e){
     e.stopPropagation();
@@ -2259,6 +2374,7 @@
       $('promptText').textContent = left === 0 ? 'Done' : left + ' to go';
       return;
     }
+    if (state.mode === 'pop'){ p.classList.add('hide'); return; }
     const many = state.mode === 'tap' ? state.taps > 1 : state.holes > 1;
     p.classList.toggle('hide', !(many && state.goal));
     if (many && state.goal){
@@ -2334,7 +2450,10 @@
     const gridded = state.mode === 'jigsaw' || state.mode === 'blocks';
     $('pieceRow').classList.toggle('hide', !gridded);
     $('picRow').classList.toggle('hide', state.mode !== 'jigsaw');
-    $('tapRow').classList.toggle('hide', state.mode !== 'tap');
+    $('tapRow').classList.toggle('hide', state.mode !== 'tap' && state.mode !== 'pop');
+    $('tapNote').textContent = state.mode === 'pop'
+      ? 'How many float up at once. Every one is a catch, no matching.'
+      : 'More than one means matching the shape in the corner.';
     $('sortRow').classList.toggle('hide', state.mode !== 'sort');
     $('moveRow').classList.toggle('hide', state.mode !== 'sort');
     $('rowClearRow').classList.toggle('hide', state.mode !== 'blocks');
@@ -2344,14 +2463,15 @@
     /* Tap mode has nowhere to put the cue: its goal sits in the HUD chip,
        whose translucent background is not the field colour, so an ink
        drawn there would not carry its calculated contrast. */
-    $('fusionRow').classList.toggle('off', state.mode === 'tap');
+    $('fusionRow').classList.toggle('off', state.mode === 'tap' || state.mode === 'pop');
     /* A single-eye plan still works — pieces to that eye, cues to the other.
        Only "Both" degenerates, because there is no other eye to cue with. */
     if (state.fusion && state.eyePlan === 'both'){
       $('fusionNote').textContent = 'Has no effect while "Which eye works" is set to Both — there is no other eye to put the cue on.';
     }
     $('modeNote').textContent =
-      state.mode === 'jigsaw' ? 'Build the picture, one piece at a time.'
+      state.mode === 'pop'    ? 'Catch the characters before they float away.'
+    : state.mode === 'jigsaw' ? 'Build the picture, one piece at a time.'
     : state.mode === 'blocks' ? 'Drop each block into the hole it fits.'
     : state.mode === 'sort'   ? 'Drag the piece onto the hole that matches it.'
     :                           'Touch the shape wherever it lands.';
@@ -2365,9 +2485,9 @@
     /* Dock and panel are peers — both marked from here, never separately. */
     mark('#dockPieces .step', 'n', String(state.pieces));
     mark('#dockFusion .step', 'fusion', state.fusion ? '1' : '0');
-    $('dock').classList.toggle('gone', !!state.childLock);
+    $('dock').classList.toggle('gone', !dockShown());
 
-    const shapeRelevant = state.mode === 'sort' || state.mode === 'tap' ||
+    const shapeRelevant = state.mode === 'sort' || state.mode === 'tap' || state.mode === 'pop' ||
                           (state.mode === 'jigsaw' && state.picture !== 'photo');
     $('dockShapeGroup').classList.toggle('hide', !shapeRelevant);
     $('dockShapeRule').classList.toggle('hide', !shapeRelevant);
@@ -2740,6 +2860,7 @@
 
   /* Tapping bare field is free: a miss only counts against a wrong shape. */
   play.addEventListener('pointerdown', () => { audio(); });
+  field.addEventListener('pointerdown', onPopDown);
 
   let resizeTimer = null;
   window.addEventListener('resize', () => {
@@ -2757,6 +2878,12 @@
     if (document.visibilityState === 'visible') keepAwake();
   });
 
+  /* Demo link: puzzle.html#pop starts Pop! with the character packs on.
+     In memory only until a setting is touched, like any other change. */
+  if (location.hash === '#pop'){
+    state.mode = 'pop';
+    state.packs = ['kingdom', 'mouseclub', 'spaceknights'];
+  }
   keepAwake();
   syncInkInputs();
   paintGallery();
