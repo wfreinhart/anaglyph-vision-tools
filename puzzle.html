@@ -2026,7 +2026,7 @@
      Taps are caught on the field, not the bubble, and go to the nearest
      bubble within reach: a three-year-old aims at where it WAS, and a
      moving element's own box is a small, unforgiving target. */
-  let popId = null, popBodies = [], popLastT = null, popSpawnAt = 0;
+  let popId = null, popBodies = [], popLastT = null, popSpawnAt = 0, popQuietUntil = 0;
 
   function stopPop(){
     if (popId) cancelAnimationFrame(popId);
@@ -2101,7 +2101,12 @@
       const d = Math.hypot(e.clientX - o.x, e.clientY - o.y);
       if (d < nearD){ nearD = d; near = o; }
     });
-    if (!near || nearD > near.s * 0.75){ recordStray(); return; }   // free, but logged
+    if (!near || nearD > near.s * 0.75){
+      /* Free, but logged — except while the caught bubble is still popping
+         or the reward burst is up: taps then are at the reward, not guesses. */
+      if (performance.now() >= popQuietUntil) recordStray();
+      return;
+    }
     near.gone = true;
     near.el.classList.add('pop');
     setTimeout(() => near.el.remove(), 360);
@@ -2116,6 +2121,7 @@
     const party = state.hits % 5 === 0;
     if (party) celebrate({ x:near.x, y:near.y });
     popSpawnAt = performance.now() + (party ? 1150 : 450);
+    popQuietUntil = popSpawnAt;
   }
 
   /* ---------- interaction ---------- */
@@ -2395,7 +2401,10 @@
   function recordPop(o, result, ms){
     const log = readPop(), day = popDay(log);
     if (day.trials.length < 600) day.trials.push({
-      e:o.eye, sh:o.shape, x:Math.round(o.x / Math.max(1, field.clientWidth) * 100) / 100,
+      /* x0 where it rose from, x where it was caught or left. */
+      e:o.eye, sh:o.shape,
+      x0:Math.round(o.x0 / Math.max(1, field.clientWidth) * 100) / 100,
+      x:Math.round(o.x / Math.max(1, field.clientWidth) * 100) / 100,
       sz:o.s, r:result, ms:result === 'hit' ? Math.round(ms) : null,
       side:state.redSide, ink:inkFor(o.eye)
     });
@@ -2422,7 +2431,7 @@
                String(away).padStart(3) + ' floated away (' + Math.round(away / t.length * 100) + '%)  ' +
                med.padStart(5) + ' median');
     });
-    out.push('  taps on empty field: ' + num(day.stray));
+    out.push('  other taps on the field: ' + num(day.stray) + ' (not counting just after a catch)');
     return out;
   }
 

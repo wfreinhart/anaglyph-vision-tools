@@ -5,7 +5,7 @@ The optics model, the measured inks, and the clinical defaults (white field, str
 Patient context (from AUDIT_BRIEF): age 3, exotropia, **left eye turns out**, right eye reported normal. Not established: amblyopia, fixation preference, or suppression. Which eye wears the red lens is configurable. AAPOS: exercises have no proven benefit for intermittent exotropia in general (https://www.aapos.org/glossary/exotropia).
 
 ## 1. Pop! trial log — built, logging only
-Pop! shows one target at a time to one eye, with a known appearance time, so it can log each presentation. It writes its own log (`anaglyph.pop.v1`), separate from the pooled per-eye log the other games share. Each bubble shown is recorded with: eye, shape, horizontal position (0–1), size, result (`hit` or floated `away`), appearance-to-touch time for hits, lens side and ink. Taps on empty field are counted too, including taps between bubbles. Settings → stats shows per eye: shown, caught, floated away (as a % of shown), and the median time among caught bubbles.
+Pop! shows one target at a time to one eye, with a known appearance time, so it can log each presentation. It writes its own log (`anaglyph.pop.v1`), separate from the pooled per-eye log the other games share. Each bubble shown is recorded with: eye, shape, horizontal position where it rose (x0) and where it was caught or left (x), both 0–1, size, result (`hit` or floated `away`), appearance-to-touch time for hits, lens side and ink. Other taps on the field are counted too (between bubbles included), except in the reward window just after a catch while the bubble is still popping or the burst is up. Those taps are aimed at the reward, so this count is **not** a guessing estimate. Settings → stats shows per eye: shown, caught, floated away (as a % of shown), and the median time among caught bubbles.
 
 **What it is and isn't.** It is an exploratory, eye-conditioned **performance asymmetry** that might be worth a clinician's look. It **does not identify suppression.** The two eyes always differ in more than the eye: each eye is permanently tied to a different lens, ink and display channel, whose perceived strength the app's RGB model does not equalise. Position, path, shape and ink area, attention, fatigue and order, motor response and guessing also vary. Clinical suppression is measured with binocular sensory tests (for example dichoptic contrast thresholds), not with reaction time. Median time is computed only over caught bubbles, so it is biased toward the bubbles he did catch. Strict alternation equalises *presentations*, not completed trials.
 
@@ -22,7 +22,7 @@ Today it is strict 50/50 alternation (or all one eye). A ratio such as 2 left : 
 
 ## 4. Check trials — proposal
 Two different checks, often confused:
-- **Sham intervals** (no bubble for a while, all taps recorded) estimate guessing and anticipation. The empty-field tap count in item 1 is a first step toward this.
+- **Sham intervals** (no bubble for a while, all taps recorded) estimate guessing and anticipation. Item 1's field-tap count is not this: it is a by-product, not a designed sham.
 - **A bubble for an eye deliberately covered** by a parent is a channel-separation / cover-compliance check (are the glasses and inks really separating the eyes?), not a suppression test. It fits a weekly parent-assisted check.
 
 ## 5. Fusion in Pop! — idea
