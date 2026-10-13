@@ -3030,12 +3030,12 @@
   });
   window.addEventListener('pagehide', () => abortDrag('hidden'));
 
-  /* Demo link: puzzle.html#pop starts Pop! with Ice Age (Leo's ask) and Mushroom Kingdom on.
+  /* Demo link: puzzle.html#pop starts Pop! with all four character packs on (Ice Age, Mario, Mickey, Young Jedi).
      In memory only until a setting is touched, like any other change. */
   function demoHash(){
     if (location.hash !== '#pop') return false;
     state.mode = 'pop';
-    state.packs = ['iceage', 'kingdom'];
+    state.packs = ['iceage', 'kingdom', 'mouseclub', 'spaceknights'];
     /* A saved 'Left only'/'Right only'/'Both' would otherwise carry into
        Pop! and make every bubble one eye's (Wes: "doesn't seem to use both
        eyes"). The demo is the clinical default: strict alternation. */
