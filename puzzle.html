@@ -581,7 +581,7 @@
     </div>
   </div>
 
-  <div class="row">
+  <div class="row" id="shapeSetRow">
     <div>
       <div class="label">Shape set</div>
     </div>
@@ -2598,6 +2598,11 @@
     $('sortRow').classList.toggle('hide', state.mode !== 'sort');
     $('moveRow').classList.toggle('hide', state.mode !== 'sort');
     $('rowClearRow').classList.toggle('hide', state.mode !== 'blocks');
+    /* Packs and shape set only matter where a round draws built-in shapes:
+       not Blocks (tetrominoes), not a Jigsaw showing a photo or scene. */
+    const usesShapes = state.mode !== 'blocks' && !(state.mode === 'jigsaw' && usePicture());
+    $('packRow').classList.toggle('hide', !usesShapes);
+    $('shapeSetRow').classList.toggle('hide', !usesShapes);
     $('sizeRow').classList.toggle('off', gridded);
     $('mixRow').classList.toggle('off', state.mode !== 'tap' || state.taps < 2);
     $('assistRow').classList.toggle('off', state.mode !== 'blocks');
@@ -3030,12 +3035,17 @@
   });
   window.addEventListener('pagehide', () => abortDrag('hidden'));
 
-  /* Demo link: puzzle.html#pop starts Pop! with all four character packs on (Ice Age, Mario, Mickey, Young Jedi).
+  /* Demo link: puzzle.html#pop starts Pop! with all four character packs on (Ice Age, Mario, Mickey, Young Jedi)
+     unless packs were already chosen in Settings.
      In memory only until a setting is touched, like any other change. */
   function demoHash(){
     if (location.hash !== '#pop') return false;
     state.mode = 'pop';
-    state.packs = ['iceage', 'kingdom', 'mouseclub', 'spaceknights'];
+    /* Only when no pack choice has been saved: a parent's own pick from
+       Settings must survive reopening the link. */
+    const saved = store.get(GAME_KEY, {});
+    if (!(saved && Array.isArray(saved.packs)))
+      state.packs = ['iceage', 'kingdom', 'mouseclub', 'spaceknights'];
     /* A saved 'Left only'/'Right only'/'Both' would otherwise carry into
        Pop! and make every bubble one eye's (Wes: "doesn't seem to use both
        eyes"). The demo is the clinical default: strict alternation. */
