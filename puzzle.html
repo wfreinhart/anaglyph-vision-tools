@@ -526,7 +526,7 @@
 
   <div class="row hide" id="tapRow">
     <div>
-      <div class="label">Shapes on screen<span class="sub" id="tapNote">More than one means matching the shape in the corner.</span></div>
+      <div class="label">Shapes on screen<span class="sub">More than one means matching the shape in the corner.</span></div>
     </div>
     <div class="chips" id="tapChips">
       <button class="chip on" data-n="1">1</button>
@@ -2055,7 +2055,7 @@
     if (popLastT === null) popLastT = t;
     const dt = Math.min(0.05, (t - popLastT) / 1000);
     popLastT = t;
-    const b = bounds(), want = Math.max(1, Math.min(3, state.taps));
+    const b = bounds();
 
     popBodies = popBodies.filter(o => {
       if (o.gone) return false;
@@ -2074,8 +2074,10 @@
       return true;
     });
 
-    /* Stagger arrivals so several on screen never start in a row. */
-    if (popBodies.length < want && t >= popSpawnAt){
+    /* One bubble at a time, always. Opaque paint is not neutral: two
+       opposite-eye bubbles overlapping would each bite a field-coloured
+       hole in the other, showing the wrong eye where its partner is. */
+    if (!popBodies.length && t >= popSpawnAt){
       spawnBubble();
       popSpawnAt = t + 1400;
     }
@@ -2086,6 +2088,7 @@
     if (state.mode !== 'pop' || !popBodies.length) return;
     let near = null, nearD = Infinity;
     popBodies.forEach(o => {
+      if (o.gone) return;   // a second finger before the next frame
       const d = Math.hypot(e.clientX - o.x, e.clientY - o.y);
       if (d < nearD){ nearD = d; near = o; }
     });
@@ -2097,9 +2100,13 @@
     record(near.eye, true, performance.now() - near.born);
     sayYes(); buzz(12);
     paintHud();
-    if (state.hits % 5 === 0) celebrate({ x:near.x, y:near.y });
-    /* The next one comes quickly after a catch, so the rhythm is his. */
-    popSpawnAt = Math.min(popSpawnAt, performance.now() + 450);
+    /* The next one comes quickly after a catch, so the rhythm is his. On a
+       celebration it waits until the binocular burst has fully cleared: a
+       burst over a monocular bubble would mask it for one eye and outline
+       it for the other. */
+    const party = state.hits % 5 === 0;
+    if (party) celebrate({ x:near.x, y:near.y });
+    popSpawnAt = performance.now() + (party ? 1150 : 450);
   }
 
   /* ---------- interaction ---------- */
@@ -2450,10 +2457,7 @@
     const gridded = state.mode === 'jigsaw' || state.mode === 'blocks';
     $('pieceRow').classList.toggle('hide', !gridded);
     $('picRow').classList.toggle('hide', state.mode !== 'jigsaw');
-    $('tapRow').classList.toggle('hide', state.mode !== 'tap' && state.mode !== 'pop');
-    $('tapNote').textContent = state.mode === 'pop'
-      ? 'How many float up at once. Every one is a catch, no matching.'
-      : 'More than one means matching the shape in the corner.';
+    $('tapRow').classList.toggle('hide', state.mode !== 'tap');
     $('sortRow').classList.toggle('hide', state.mode !== 'sort');
     $('moveRow').classList.toggle('hide', state.mode !== 'sort');
     $('rowClearRow').classList.toggle('hide', state.mode !== 'blocks');
@@ -2880,10 +2884,17 @@
 
   /* Demo link: puzzle.html#pop starts Pop! with the character packs on.
      In memory only until a setting is touched, like any other change. */
-  if (location.hash === '#pop'){
+  function demoHash(){
+    if (location.hash !== '#pop') return false;
     state.mode = 'pop';
     state.packs = ['kingdom', 'mouseclub', 'spaceknights'];
+    return true;
   }
+  demoHash();
+  /* Editing only the #fragment of an open tab does not reload the page. */
+  window.addEventListener('hashchange', () => {
+    if (demoHash()){ syncInkInputs(); paint(); newRound(); }
+  });
   keepAwake();
   syncInkInputs();
   paintGallery();

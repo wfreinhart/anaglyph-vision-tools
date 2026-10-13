@@ -33,3 +33,4 @@ The therapy only works if he plays it regularly; a stale or flaky game gets refu
 ## Decision record
 
 - 2026-10-13: support framing accepted in full. Changes: "fresh" means new mechanics, since packs and scenes already exist; stereo may be proposed but not built; no-tests-on-mini covers verify.py too; I added the decoration-leak rule. Why: each was verified against current puzzle.html or the policy page, and none enlarges the grant.
+- 2026-10-13: support's pre-playtest blocker accepted. Pop! shows one bubble at a time (opposite-eye bubbles overlapping punch field-coloured holes in each other: a wrong-eye position cue), the next bubble waits for the binocular burst to clear, and a bubble already caught can't be scored again. Why: the cost is only a few lines, and the alternative is a leak that looks like a working session. Multi-bubble Pop needs collision-free lanes before it is exposed clinically (backlog).

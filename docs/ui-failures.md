@@ -15,3 +15,8 @@ Each entry: environment, steps, observed vs expected, evidence, status.
 - **H1. A resize mid-drag rebuilds the round.** `window.resize` → `newRound()` after 220 ms with no drag check. iOS Safari fires resize when its toolbar shows or hides, which can happen during a drag. Expected symptom: the piece vanishes from under the finger. Repro plan: emulated drag + `setViewportSize` mid-drag; confirm on the iPad.
 - **H2. No `lostpointercapture` handler.** If capture is lost without `pointerup`/`pointercancel`, `drag` stays set, `onGrab` returns early forever, and nothing can be picked up until a reload. Repro plan: dispatch `lostpointercapture` mid-drag in emulation.
 - **H3. Tap mode scores on `pointerup` at the target.** A finger that lands on a target and slides off loses the tap. Low severity.
+
+## F2. A `#pop` link does nothing in an already-open tab
+- **Env:** emulated, WebKit. **Steps:** open `puzzle.html`, then navigate to `puzzle.html#pop`.
+- **Observed:** mode stays Jigsaw (fragment-only navigation does not reload; `#pop` was read only at load). **Expected:** Pop! starts.
+- **Status:** fixed (`hashchange` handler). Same script: mode = pop without a reload.
