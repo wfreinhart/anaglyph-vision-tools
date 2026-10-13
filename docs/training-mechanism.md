@@ -1,37 +1,39 @@
 # Training mechanism — proposals for Wes and the doctor
 
-The optics model, the measured inks, and the clinical defaults (white field, strict L/R alternation, fusion off) are unchanged. Everything below that would change *what the eyes are asked to do* is a proposal for the doctor. Nothing here is built except item 1, which only records data.
+The optics model, the measured inks, and the clinical defaults (white field, strict L/R alternation, fusion off) are unchanged. Everything below that would change *what the eyes are asked to do* is a proposal for the doctor. Only item 1 is built, and it only logs.
 
-Patient context (from AUDIT_BRIEF): age 3, exotropia, **left eye turns out**, right eye normal. Which eye wears the red lens is configurable.
+Patient context (from AUDIT_BRIEF): age 3, exotropia, **left eye turns out**, right eye reported normal. Not established: amblyopia, fixation preference, or suppression. Which eye wears the red lens is configurable. AAPOS: exercises have no proven benefit for intermittent exotropia in general (https://www.aapos.org/glossary/exotropia).
 
-## 1. Per-eye "floated away" count in Pop! — built, measurement only
-Pop! is the cleanest trial in the app: one target, one eye, a known appearance time. So its numbers mean something:
-- **avg time** in Pop! is real time from appearance to touch (unlike Jigsaw/Blocks, where it is the interval between placements; see AUDIT_CODEX).
-- **floated away** (new, per eye) counts targets he never touched before they left.
+## 1. Pop! trial log — built, logging only
+Pop! shows one target at a time to one eye, with a known appearance time, so it can log each presentation. It writes its own log (`anaglyph.pop.v1`), separate from the pooled per-eye log the other games share. Each bubble shown is recorded with: eye, shape, horizontal position (0–1), size, result (`hit` or floated `away`), appearance-to-touch time for hits, lens side and ink. Taps on empty field are counted too, including taps between bubbles. Settings → stats shows per eye: shown, caught, floated away (as a % of shown), and the median time among caught bubbles.
 
-If the left-eye targets float away much more often than the right-eye ones, or take much longer to tap, that is the clearest sign of left-eye suppression the app can produce. Read it in Settings → stats. The count changes no gameplay.
+**What it is and isn't.** It is an exploratory, eye-conditioned **performance asymmetry** that might be worth a clinician's look. It **does not identify suppression.** The two eyes always differ in more than the eye: each eye is permanently tied to a different lens, ink and display channel, whose perceived strength the app's RGB model does not equalise. Position, path, shape and ink area, attention, fatigue and order, motor response and guessing also vary. Clinical suppression is measured with binocular sensory tests (for example dichoptic contrast thresholds), not with reaction time. Median time is computed only over caught bubbles, so it is biased toward the bubbles he did catch. Strict alternation equalises *presentations*, not completed trials.
 
-*Caveat:* Pop! and Touch-it/Jigsaw share the same per-eye daily bucket, so on a day with mixed games the average mixes the two kinds of time. Splitting the log by game is a small follow-up if the doctor wants the numbers.
+**If the doctor wants a controlled comparison:** balance shape and horizontal-position bins across eyes, and alternate which eye starts each session (today it always starts left). The playtest doesn't need this, because nothing is being concluded from it.
 
-## 2. Contrast rebalancing for the fellow (right) eye — proposal, doctor decides
-The standard dichoptic anti-suppression approach: show the dominant eye's targets at **reduced contrast** so the deviating eye isn't out-competed, then fade back toward equal as suppression eases. The app can do this without leaving the optics model: every tone on the field→ink line has the same wrong-eye leak ratio (HANDOFF, "Photo puzzles"), so `rampInk(eye, t)` with t < 1 is an exactly-as-clean, fainter target.
-- Shape: a setting "Right-eye targets: 100% / 75% / 50%", off (100%) by default.
-- **Needs from the doctor:** whether this is wanted at all for an exotrope with a normal right eye, which eye, the starting level, and how to progress it.
+## 2. Lower contrast for one eye's targets — proposal, doctor decides
+Contrast-rebalancing evidence comes mainly from **amblyopia**: simultaneous binocular content, with the amblyopic eye at full contrast and the fellow eye reduced (e.g. 3–5-year-olds watching rebalanced cartoons, https://pubmed.ncbi.nlm.nih.gov/39270746/). That does not carry over directly here. Pop! shows one monocular target at a time, so lowering one eye's contrast doesn't rebalance any binocular competition; it just makes that eye's trials fainter. Leo has exotropia, not established amblyopia.
+
+How the app *could* do it: `rampInk(eye, t)` with t < 1. In the app's linear RGB model every tone on the field→ink line has the **same predicted ghost ratio** as the full ink. That is a model prediction, not a measurement: only the full-strength inks were checked on his glasses, and the real display, filters, room light and contrast sensitivity are not linear. A low t could become invisible to the intended eye while the ratio stays the same.
+- **Needs from the doctor:** whether this is wanted at all, for which eye, from what level, and how to progress it. The evidence is indirect and not validated for this child or this task.
 
 ## 3. Uneven eye split — proposal, doctor decides
-Today it is strict 50/50 alternation (or all one eye). A ratio such as 2 left : 1 right is a one-line change to `nextEye()`. AUDIT_CODEX's view: keep 50/50 as the neutral default and change it only on a prescribed ratio.
+Today it is strict 50/50 alternation (or all one eye). A ratio such as 2 left : 1 right is a one-line change to `nextEye()`. No therapeutic dose is claimed for any ratio. AUDIT_CODEX recommends 50/50 as the neutral default unless a ratio is prescribed.
 
-## 4. Catch trials — proposal
-Nothing tells apart a child who sees the target from one guessing from sound or timing. In Pop! a catch trial would be a bubble inked for the eye that is *covered* during a deliberate cover test. That needs the parent's help, so it fits a weekly cover-one-eye check, not every session. Low priority until the stats above show something.
+## 4. Check trials — proposal
+Two different checks, often confused:
+- **Sham intervals** (no bubble for a while, all taps recorded) estimate guessing and anticipation. The empty-field tap count in item 1 is a first step toward this.
+- **A bubble for an eye deliberately covered** by a parent is a channel-separation / cover-compliance check (are the glasses and inks really separating the eyes?), not a suppression test. It fits a weekly parent-assisted check.
 
 ## 5. Fusion in Pop! — idea
-Fusion mode splits one action across both eyes (piece for one, hole for the other). A Pop! version: a bubble for one eye carries a small "target ring" seen only by the other eye, and only bubbles with a ring score. Not safe until rings can never overlap a bubble (the occlusion trap in HANDOFF); park it until Wes reports how Pop! goes.
+A Pop! version of fusion mode: a bubble for one eye carries a small ring seen only by the other eye, and only bubbles with a ring score. Not safe until a ring can never overlap a bubble (the occlusion trap in HANDOFF). Parked until Wes reports how Pop! goes.
 
 ## 6. Stereo / 3D — not built
-It needs the doctor's measurements (control, fusional vergence, stereoacuity) and a disparity plan for iPad viewing distance. AUDIT_CODEX covers the open questions.
+It needs the doctor's measurements (control, fusional vergence, stereoacuity) and a disparity plan for iPad viewing distance. AUDIT_CODEX lists the open questions.
 
 ## Questions to take to the doctor
-1. For Leo specifically, is the aim to reduce left-eye suppression, train fusion, or both? This decides between items 2/3 and item 5.
-2. Is it acceptable to lower the right eye's target contrast (item 2), and from what level?
-3. Is there a target session length and frequency?
-4. Which numbers would they like to see: per-eye floated-away rate and time-to-touch from Pop!, or something else?
+1. For Leo specifically, is the aim reducing suppression (if present), training fusion, or something else? This decides between items 2/3 and item 5.
+2. Has fixation preference or suppression been established, and in which eye?
+3. Is lowering one eye's target contrast acceptable (item 2), and from what level?
+4. Is there a target session length and frequency?
+5. Are Pop!'s per-eye performance numbers (item 1) useful to them, and in what form?

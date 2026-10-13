@@ -743,6 +743,7 @@
   const CALIB_KEY = 'anaglyph.calib.v1';
   const GAME_KEY  = 'anaglyph.puzzle.v1';
   const LOG_KEY   = 'anaglyph.log.v1';
+  const POP_KEY   = 'anaglyph.pop.v1';
 
   /* ---------- the shapes ----------
      Solid silhouettes only. A three year old reads a filled outline far
@@ -2045,7 +2046,7 @@
     /* Rise the full height in about seven seconds: slow enough to catch,
        quick enough that waiting for it is not the game. */
     const rise = Math.max(1, b.y1 - b.y0);
-    popBodies.push({ el:el, eye:eye, x0:x, x:x, y:b.y1, vy:-rise / 7,
+    popBodies.push({ el:el, eye:eye, shape:shape, x0:x, x:x, y:b.y1, vy:-rise / 7,
                      ph:Math.random() * Math.PI * 2, born:performance.now(), s:s });
     paintHud();
   }
@@ -2070,7 +2071,7 @@
       if (o.y < b.y0){
         /* Floated away. Not a wrong answer and no fail state — but it is
            logged per eye, apart from hits and misses. */
-        recordEscape(o.eye);
+        recordPop(o, 'away', 0);
         o.el.classList.add('pop');
         setTimeout(() => o.el.remove(), 360);
         return false;
@@ -2091,19 +2092,21 @@
   }
 
   function onPopDown(e){
-    if (state.mode !== 'pop' || !popBodies.length) return;
+    if (state.mode !== 'pop') return;
+    /* Taps with nothing to aim at (between bubbles) count as stray too:
+       that is what shows anticipation or random tapping. */
     let near = null, nearD = Infinity;
     popBodies.forEach(o => {
       if (o.gone) return;   // a second finger before the next frame
       const d = Math.hypot(e.clientX - o.x, e.clientY - o.y);
       if (d < nearD){ nearD = d; near = o; }
     });
-    if (!near || nearD > near.s * 0.75) return;   // bare field is free
+    if (!near || nearD > near.s * 0.75){ recordStray(); return; }   // free, but logged
     near.gone = true;
     near.el.classList.add('pop');
     setTimeout(() => near.el.remove(), 360);
     state.hits += 1;
-    record(near.eye, true, performance.now() - near.born);
+    recordPop(near, 'hit', performance.now() - near.born);
     sayYes(); buzz(12);
     paintHud();
     /* The next one comes quickly after a catch, so the rhythm is his. On a
@@ -2374,36 +2377,75 @@
     store.set(LOG_KEY, log);
   }
 
-  /* Pop! only: a bubble that floated away untouched. Not a miss — nothing
-     was tapped wrong — but per eye it is the number that would show one
-     eye not picking targets up (docs/training-mechanism.md). */
-  function recordEscape(eye){
-    const log = readLog();
+  /* Pop! keeps its own log, one record per bubble shown, apart from the
+     pooled per-eye log above. Its numbers are task performance by eye, not
+     a suppression measure: ink channel, position, shape and attention all
+     differ between trials (docs/training-mechanism.md). Recording the
+     covariates is what lets a clinician judge that. r: 'hit' | 'away';
+     ms is appearance-to-touch for hits only; x is 0..1 across the field. */
+  function readPop(){ const raw = store.get(POP_KEY, {}); return isPlain(raw) ? raw : {}; }
+  function popDay(log){
     const key = today();
     if (!isPlain(log[key])) log[key] = {};
-    if (!isPlain(log[key][eye])) log[key][eye] = { hits:0, misses:0, ms:0 };
-    const e = log[key][eye];
-    e.escapes = num(e.escapes) + 1;
-    store.set(LOG_KEY, log);
+    const day = log[key];
+    if (!Array.isArray(day.trials)) day.trials = [];
+    day.stray = num(day.stray);
+    return day;
+  }
+  function recordPop(o, result, ms){
+    const log = readPop(), day = popDay(log);
+    if (day.trials.length < 600) day.trials.push({
+      e:o.eye, sh:o.shape, x:Math.round(o.x / Math.max(1, field.clientWidth) * 100) / 100,
+      sz:o.s, r:result, ms:result === 'hit' ? Math.round(ms) : null,
+      side:state.redSide, ink:inkFor(o.eye)
+    });
+    store.set(POP_KEY, log);
+  }
+  function recordStray(){
+    const log = readPop(), day = popDay(log);
+    day.stray += 1;
+    store.set(POP_KEY, log);
+  }
+  function popLines(){
+    const day = readPop()[today()];
+    if (!isPlain(day) || !Array.isArray(day.trials) || !day.trials.length) return [];
+    const name = { L:'left ', R:'right', both:'both ' };
+    const out = ['', 'Pop! today (performance by eye, not a suppression test)'];
+    ['L', 'R', 'both'].forEach(eye => {
+      const t = day.trials.filter(r => isPlain(r) && r.e === eye);
+      if (!t.length) return;
+      const hits = t.filter(r => r.r === 'hit'), away = t.length - hits.length;
+      const ms = hits.map(r => num(r.ms)).sort((a, b) => a - b);
+      const med = ms.length ? (ms[Math.floor((ms.length - 1) / 2)] / 1000).toFixed(1) + 's' : '  —';
+      out.push('  ' + name[eye] + '  ' + String(t.length).padStart(3) + ' shown  ' +
+               String(hits.length).padStart(3) + ' caught  ' +
+               String(away).padStart(3) + ' floated away (' + Math.round(away / t.length * 100) + '%)  ' +
+               med.padStart(5) + ' median');
+    });
+    out.push('  taps on empty field: ' + num(day.stray));
+    return out;
   }
 
   function paintStats(){
     const log = readLog();
     const day = isPlain(log[today()]) ? log[today()] : null;
-    if (!day || !Object.keys(day).length){ $('statLine').textContent = 'No taps yet today.'; return; }
+    if (!day || !Object.keys(day).length){
+      const pop = popLines();
+      $('statLine').textContent = pop.length ? pop.slice(1).join('\n') : 'No taps yet today.';
+      return;
+    }
     const name = { L:'left ', R:'right', both:'both ' };
     const lines = ['this session   ' + state.hits + ' right, ' + state.misses + ' wrong', ''];
     Object.keys(day).sort().forEach(eye => {
       const e = isPlain(day[eye]) ? day[eye] : {};
-      const hits = num(e.hits), misses = num(e.misses), tot = num(e.ms), esc = num(e.escapes);
+      const hits = num(e.hits), misses = num(e.misses), tot = num(e.ms);
       const avg = hits ? (tot / hits / 1000).toFixed(1) + 's' : '  —';
       lines.push('today ' + (name[eye] || eye) + '   ' +
                  String(hits).padStart(3) + ' right   ' +
                  String(misses).padStart(3) + ' wrong   ' +
-                 avg.padStart(5) + ' avg' +
-                 (esc ? '   ' + String(esc).padStart(3) + ' floated away' : ''));
+                 avg.padStart(5) + ' avg');
     });
-    $('statLine').textContent = lines.join('\n');
+    $('statLine').textContent = lines.concat(popLines()).join('\n');
   }
 
   /* ---------- painting ---------- */
@@ -2859,6 +2901,9 @@
     const log = readLog();
     delete log[today()];
     store.set(LOG_KEY, log);
+    const pop = readPop();
+    delete pop[today()];
+    store.set(POP_KEY, pop);
     state.hits = 0; state.misses = 0;
     paint();
   });
