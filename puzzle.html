@@ -1237,7 +1237,7 @@
        then lands on the new board where nothing listens for it. Left set,
        `drag` made onGrab refuse every later grab until a reload — every
        drag on the iPad dead after one badly-timed rotation. */
-    if (drag){ litRegions(false, drag.el); drag = null; }
+    abortDrag('rebuild', true);
     field.innerHTML = '';
     jigCells = [];
     state.curEye = nextEye();
@@ -2152,7 +2152,39 @@
     el.addEventListener('pointermove', onDrag);
     el.addEventListener('pointerup', onDrop);
     el.addEventListener('pointercancel', onDrop);
+    el.addEventListener('lostpointercapture', onLost);
   }
+
+  /* Every way a drag can end other than the piece's own up/cancel. A drag
+     left set makes onGrab refuse all later grabs (docs/ui-failures.md F3),
+     so each interruption releases it here, without scoring. Each one is
+     counted by reason in window.dragAborts and logged, so if one fires on
+     the iPad the Web Inspector shows which path it was. */
+  const dragAborts = window.dragAborts = {};
+  function abortDrag(reason, rebuilding){
+    if (!drag) return;
+    const el = drag.el;
+    drag = null;
+    dragAborts[reason] = (dragAborts[reason] || 0) + 1;
+    console.warn('drag aborted:', reason);
+    el.removeEventListener('pointermove', onDrag);
+    el.removeEventListener('pointerup', onDrop);
+    el.removeEventListener('pointercancel', onDrop);
+    el.removeEventListener('lostpointercapture', onLost);
+    el.style.transform = '';
+    el.classList.remove('held');
+    litRegions(false, el);
+    if (rebuilding) return;          // the field is about to be cleared
+    shrinkPiece(el);
+    goHome(el, JSON.parse(el.dataset.home));
+  }
+  /* Normally fires after up/cancel, when drag is already null: a no-op. */
+  function onLost(e){ if (drag && e.pointerId === drag.id) abortDrag('lostcapture'); }
+  /* If capture was never acquired, the release lands somewhere else. The
+     piece's own onDrop runs first when it is the target, so this only
+     catches the stray case. */
+  document.addEventListener('pointerup', e => { if (drag && e.pointerId === drag.id) abortDrag('stray-up'); });
+  document.addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.id) abortDrag('stray-cancel'); });
 
   function onDrag(e){
     if (!drag || e.pointerId !== drag.id) return;
@@ -2200,6 +2232,7 @@
     el.removeEventListener('pointermove', onDrag);
     el.removeEventListener('pointerup', onDrop);
     el.removeEventListener('pointercancel', onDrop);
+    el.removeEventListener('lostpointercapture', onLost);
     drag = null;
 
     if (cancelled){ goHome(el, home); return; }
@@ -2834,6 +2867,7 @@
   let taps = [];
 
   function openPanel(){
+    abortDrag('panel');
     panel.classList.add('on'); scrim.classList.add('on');
     panel.setAttribute('aria-hidden','false');
     syncInkInputs(); sizeRange.value = state.size; paint();
@@ -2890,7 +2924,9 @@
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') keepAwake();
+    else abortDrag('hidden');
   });
+  window.addEventListener('pagehide', () => abortDrag('hidden'));
 
   /* Demo link: puzzle.html#pop starts Pop! with the character packs on.
      In memory only until a setting is touched, like any other change. */

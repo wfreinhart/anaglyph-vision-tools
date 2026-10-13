@@ -26,3 +26,8 @@ Each entry: environment, steps, observed vs expected, evidence, status.
 - **Observed:** the held piece vanishes (`newRound` rebuilt the board 220 ms after resize, ignoring the drag); afterwards **no piece can be dragged** — `drag` stayed set because the release landed on the new board, which has no drop listener, so `onGrab` returned early forever. **Expected:** drag continues; later drags work.
 - **iPad trigger (inferred, not yet observed):** rotation, Split View/Slide Over, Safari toolbar resize.
 - **Fix:** `newRound` releases any held drag; resize rebuild waits until no piece is held. Same script after the fix: all four drags move normally, no errors.
+
+## F4. Other drag interruptions (lifecycle backstops; not reproduced as failures)
+- **Tried:** second finger taps the gear mid-drag (Chromium CDP multi-touch). Chromium cancelled finger 1's drag itself and later drags worked, so **not reproduced** there; iOS Safari may differ.
+- **Added anyway** (support's recommendation, same class as the confirmed F3): one `abortDrag(reason)` releases a live drag without scoring on rebuild, panel open, `visibilitychange` hidden / `pagehide`, a matching `lostpointercapture`, and a stray document-level up/cancel. Each one is counted in `window.dragAborts` and logged with `console.warn`, so an occurrence on the iPad can be identified via Safari Web Inspector.
+- **Checked (emulated):** a normal drag records no aborts (lostpointercapture is a no-op after a normal release); pagehide and panel-open mid-drag return the piece to its exact home; dragging works afterwards.
