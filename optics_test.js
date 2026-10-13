@@ -172,6 +172,34 @@ function whiteFieldSuite(label, m){
     m.visible('red', m.rampInk('L', 0.25)) < m.visible('red', m.rampInk('L', 1)));
 }
 
+/* puzzle.html only — toned character art. The .t1/.t2 shades are CSS
+   color-mix, a second path to the ramp that rampInk's tests do not reach.
+   Assert the rule mixes only currentColor with the field, at the tones the
+   ramp is checked at, and that every toned part is solid-only detail (.d). */
+function toneArtSuite(label, m){
+  const t = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? '  ok   ' : '  FAIL ') + name); };
+  console.log('\n' + label + ' — toned character art');
+  const src = fs.readFileSync('puzzle.html', 'utf8');
+  const rules = [...src.matchAll(/svg \.(t\d)\{fill:([^;}]*)/g)];
+  t('a .t1 and a .t2 rule exist', ['t1','t2'].every(c => rules.some(r => r[1] === c)));
+  const pct = {};
+  rules.forEach(r => {
+    const mm = r[2].match(/^color-mix\(in srgb, currentColor (\d+)%, var\(--bg\)\)$/);
+    t('.' + r[1] + ' mixes only currentColor with the field', !!mm);
+    if (mm) pct[r[1]] = Number(mm[1]) / 100;
+  });
+  m.setState({ pair:'cyan', bluePass:1, red:'#ff2ecb', green:'#2effe7', redSide:'L', bg:'#ffffff' });
+  const full = m.visible('cyan', m.rampInk('L', 1)) / m.visible('red', m.rampInk('L', 1));
+  Object.keys(pct).forEach(c => {
+    const hex = m.rampInk('L', pct[c]);
+    t('.' + c + ' tone keeps the ink\'s ghost ratio',
+      Math.abs(m.visible('cyan', hex) / m.visible('red', hex) - full) < 0.002);
+  });
+  const tagged = [...src.matchAll(/<[a-z]+ class="([^"]*\bt\d\b[^"]*)"/g)];
+  t('toned parts exist', tagged.length > 0);
+  t('every toned part is class d', tagged.every(x => /\bd\b/.test(x[1])));
+}
+
 /* puzzle.html only — the chart holds no state, by design. */
 function guardSuite(label, g, m){
   const t = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? '  ok   ' : '  FAIL ') + name); };
@@ -234,6 +262,7 @@ suite('puzzle.html', modelFrom('puzzle.html'));
 meterRolesSuite('eye-trainer.html', modelFrom('eye-trainer.html'));
 meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
+toneArtSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 guardSuite('puzzle.html', guardsFrom('puzzle.html'), modelFrom('puzzle.html'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
