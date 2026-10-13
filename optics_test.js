@@ -188,6 +188,7 @@ function toneArtSuite(label, m){
     t('.' + r[1] + ' mixes only currentColor with the field', !!mm);
     if (mm) pct[r[1]] = Number(mm[1]) / 100;
   });
+  m.setBg('#ffffff');
   m.setState({ pair:'cyan', bluePass:1, red:'#ff2ecb', green:'#2effe7', redSide:'L', bg:'#ffffff' });
   const full = m.visible('cyan', m.rampInk('L', 1)) / m.visible('red', m.rampInk('L', 1));
   Object.keys(pct).forEach(c => {
