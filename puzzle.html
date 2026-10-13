@@ -1233,6 +1233,11 @@
   function newRound(){
     stopHoleAnim();
     stopPop();
+    /* A rebuild under a held piece removes it, and the finger's release
+       then lands on the new board where nothing listens for it. Left set,
+       `drag` made onGrab refuse every later grab until a reload — every
+       drag on the iPad dead after one badly-timed rotation. */
+    if (drag){ litRegions(false, drag.el); drag = null; }
     field.innerHTML = '';
     jigCells = [];
     state.curEye = nextEye();
@@ -2869,7 +2874,12 @@
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (!panel.classList.contains('on')) newRound(); }, 220);
+    /* Never rebuild under his finger: wait for the piece to be let go. */
+    const later = () => {
+      if (drag){ resizeTimer = setTimeout(later, 250); return; }
+      if (!panel.classList.contains('on')) newRound();
+    };
+    resizeTimer = setTimeout(later, 220);
   });
 
   let wakeLock = null;
