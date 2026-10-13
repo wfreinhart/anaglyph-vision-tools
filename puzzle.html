@@ -2068,8 +2068,9 @@
       o.ph += dt * 1.6;
       o.x = Math.max(b.x0, Math.min(b.x1, o.x0 + Math.sin(o.ph) * o.s * 0.35));
       if (o.y < b.y0){
-        /* Floated away. No score either way: an escape is not a wrong
-           answer, and there is no fail state. */
+        /* Floated away. Not a wrong answer and no fail state — but it is
+           logged per eye, apart from hits and misses. */
+        recordEscape(o.eye);
         o.el.classList.add('pop');
         setTimeout(() => o.el.remove(), 360);
         return false;
@@ -2373,6 +2374,19 @@
     store.set(LOG_KEY, log);
   }
 
+  /* Pop! only: a bubble that floated away untouched. Not a miss — nothing
+     was tapped wrong — but per eye it is the number that would show one
+     eye not picking targets up (docs/training-mechanism.md). */
+  function recordEscape(eye){
+    const log = readLog();
+    const key = today();
+    if (!isPlain(log[key])) log[key] = {};
+    if (!isPlain(log[key][eye])) log[key][eye] = { hits:0, misses:0, ms:0 };
+    const e = log[key][eye];
+    e.escapes = num(e.escapes) + 1;
+    store.set(LOG_KEY, log);
+  }
+
   function paintStats(){
     const log = readLog();
     const day = isPlain(log[today()]) ? log[today()] : null;
@@ -2381,12 +2395,13 @@
     const lines = ['this session   ' + state.hits + ' right, ' + state.misses + ' wrong', ''];
     Object.keys(day).sort().forEach(eye => {
       const e = isPlain(day[eye]) ? day[eye] : {};
-      const hits = num(e.hits), misses = num(e.misses), tot = num(e.ms);
+      const hits = num(e.hits), misses = num(e.misses), tot = num(e.ms), esc = num(e.escapes);
       const avg = hits ? (tot / hits / 1000).toFixed(1) + 's' : '  —';
       lines.push('today ' + (name[eye] || eye) + '   ' +
                  String(hits).padStart(3) + ' right   ' +
                  String(misses).padStart(3) + ' wrong   ' +
-                 avg.padStart(5) + ' avg');
+                 avg.padStart(5) + ' avg' +
+                 (esc ? '   ' + String(esc).padStart(3) + ' floated away' : ''));
     });
     $('statLine').textContent = lines.join('\n');
   }
