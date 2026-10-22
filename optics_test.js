@@ -390,10 +390,11 @@ function mazeSuite(label, m, g){
   t('going back along the trail retracts it, down to the start', backtracked);
 
   /* Two characters: each trail starts at its own corner and a trail may not
-     cross a wall; the only way onto the other trail is the joining move. */
+     cross a wall. Trails may overlap; the maze is solved only when the two
+     heads meet on one cell. */
   console.log('  two trails, joining');
   {
-    let bothSafe = true, bothWalls = 0, meet = true, headHit = true, bodyHit = true, wallBlocks = true, retract = true, noEarly = true, branches = 0;
+    let bothSafe = true, bothWalls = 0, meet = true, headHit = true, bodyHit = true, wallBlocks = true, retract = true, overlapOk = true, noEarly = true, branches = 0;
     SIZES.forEach(n => {
       const cs = 60, ctr = i => ({ x:(i % n + 0.5) * cs, y:(Math.floor(i / n) + 0.5) * cs });
       for (let seed = 1; seed <= 60; seed++){
@@ -405,7 +406,7 @@ function mazeSuite(label, m, g){
         };
 
         /* Hostile fingers on both characters at once, interleaved: both
-           trails stay legal paths, disjoint until the walk reports a join. */
+           trails stay legal paths; nothing is joined until the heads meet. */
         let A = [mz.start], B = [mz.goal], lastA = ctr(mz.start), lastB = ctr(mz.goal), joined = false;
         const rnd2 = m.mazeRng(seed * 7 + n);
         for (let k = 0; k < 300 && !joined; k++){
@@ -417,9 +418,10 @@ function mazeSuite(label, m, g){
           const soundB = (() => { if (B[0] !== mz.goal) return false;
             for (let q = 1; q < B.length; q++) if (nb(mz, B[q - 1]).indexOf(B[q]) < 0) return false; return true; })();
           if (!soundB) bothSafe = false;
-          const share = A.filter(c => B.indexOf(c) >= 0).length;
-          if (r.joined){ joined = true; if (share !== 1 || !m.mazeJoined(mz, A, B)) bothSafe = false; }
-          else if (share !== 0 || m.mazeJoined(mz, A, B)) noEarly = false;
+          const headsMeet = A[A.length - 1] === B[B.length - 1];
+          if (r.joined){ joined = true; if (!headsMeet || !m.mazeJoined(mz, A, B)) bothSafe = false; }
+          else if (headsMeet || m.mazeJoined(mz, A, B)) noEarly = false;
+          if (A.some((c, q) => A.indexOf(c) !== q) || B.some((c, q) => B.indexOf(c) !== q)) bothSafe = false;
         }
 
         /* Meet in the middle: A walks the first half, B the second half, then
@@ -443,7 +445,8 @@ function mazeSuite(label, m, g){
           if (!r.joined || b.join() !== route.slice().reverse().join() || !m.mazeJoined(mz, b, a)) meet = false; }
 
         /* A cell in the middle of the other trail, not its head: B detours
-           into a branch off the route, so A reaches B's body first. */
+           into a branch off the route, so A reaches B's body first. That is
+           NOT a meeting: A walks over it, and only reaching B's head joins. */
         for (let k = 1; k < L - 1; k++){
           const side = nb(mz, route[k]).find(c => route.indexOf(c) < 0);
           if (side === undefined) continue;
@@ -453,8 +456,21 @@ function mazeSuite(label, m, g){
           hop(b, a, route.slice(k, L - 1).reverse());
           hop(b, a, [side]);
           if (m.mazeJoined(mz, a, b) || b.indexOf(route[k]) < 0 || b[b.length - 1] !== side) bodyHit = false;
+          const bBefore = b.join();
           const r = hop(a, b, [route[k]]);
-          if (!r.joined || !m.mazeJoined(mz, a, b) || a[a.length - 1] !== route[k] || b.indexOf(a[a.length - 1]) === b.length - 1) bodyHit = false;
+          if (r.joined || m.mazeJoined(mz, a, b) || a[a.length - 1] !== route[k] || b.join() !== bBefore ||
+              b.indexOf(route[k]) < 0 || b[b.length - 1] === route[k]) bodyHit = false;
+          /* overlapping trails retract correctly: A back off the body, B untouched */
+          const a2 = a.slice();
+          const rb = hop(a2, b, [route[k - 1]]);
+          if (rb.joined || a2.join() !== a.slice(0, -1).join() || b.join() !== bBefore) overlapOk = false;
+          /* B retracting from its branch onto A's head meets A (retraction can join) */
+          const b2 = b.slice();
+          const rr = hop(b2, a, [route[k]]);
+          if (!rr.joined || !m.mazeJoined(mz, a, b2) || b2.join() !== bBefore.split(',').slice(0, -1).join()) overlapOk = false;
+          /* continuing along B's trail to its head wins */
+          const r2 = hop(a, b, [side]);
+          if (!r2.joined || !m.mazeJoined(mz, a, b) || a[a.length - 1] !== b[b.length - 1]) bodyHit = false;
           break;
         }
 
@@ -490,14 +506,15 @@ function mazeSuite(label, m, g){
         }
       }
     });
-    t('both trails stay legal paths and disjoint until they join, under hostile fingers', bothSafe && noEarly);
+    t('both trails stay legal paths and nothing joins before the heads meet, under hostile fingers', bothSafe && noEarly);
     t('meeting in the middle: the last step onto the other head joins them', meet && headHit);
     t('one character alone can reach the other, from either end', meet);
-    t('stepping onto a cell in the middle of the other trail joins (' + branches + ' branch cases)', bodyHit && branches > 20);
+    t('walking over the middle of the other trail does NOT join; reaching its head after does (' + branches + ' branch cases)', bodyHit && branches > 20);
+    t('overlapping trails retract correctly for both', overlapOk && branches > 20);
     t('a flick through ' + bothWalls + ' walls that face the other trail never joins', wallBlocks && bothWalls > 20);
     t('retracting a trail undoes its progress, and nothing is joined', retract);
-    t('mazeJoined: shared cell only', m.mazeJoined({}, [1, 2, 3], [9, 8]) === false && m.mazeJoined({}, [1, 2, 3], [9, 3]) === true &&
-      m.mazeJoined({}, [4], [4]) === true);
+    t('mazeJoined: heads on one cell only', m.mazeJoined({}, [1, 2, 3], [9, 8]) === false && m.mazeJoined({}, [1, 2, 3], [9, 3]) === true &&
+      m.mazeJoined({}, [3, 2, 1], [9, 3]) === false && m.mazeJoined({}, [4], [4]) === true);
   }
 
   console.log('  inks');

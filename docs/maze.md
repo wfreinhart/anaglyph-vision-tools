@@ -8,7 +8,7 @@ new red/green localization activity." Verbatim original not checked; this is the
 ## What Leo does
 A maze appears in one eye's ink. Two pack characters sit in opposite corners, drawn exactly alike
 (full ink, the round's eye), so there is no "goal" piece and no "draggable" piece: he can drag either.
-Each leaves its own trail from its own corner. When the two trails join, the usual binocular reward
+Each leaves its own trail from its own corner. When the two characters meet, the usual binocular reward
 plays, then the next maze (eye flips under Alternate).
 
 Decision 2026-10-22 (Wes, directly): "let us drag either shape because right now there's no obvious goal
@@ -47,10 +47,15 @@ vs draggable". This replaces the first spec's fixed mover and goal.
 - Each drag walks its own trail. It snaps cell to cell. Pointer moves are sampled along the segment from the
   last point at ≤ ¼-cell steps, so a fast drag walks each open passage in order and stops at a wall; it
   never jumps. Moving back onto the previous cell of its own trail retracts it.
-- Joining: a trail never walks onto the other trail's cells except as the joining move. A head that steps
-  into any cell of the other trail (its head or its body) joins them, the walk ends there, and the maze is
-  solved. `mazeWalk(..., other)` reports it; `mazeJoined(maze, a, b)` is the DOM-free test (a shared cell).
-  The reward fires at the join cell.
+- Meeting: the maze is solved only when the two characters meet, i.e. a head steps onto the OTHER character's
+  HEAD cell. A trail may walk over the other trail's body (trails may overlap; walls, retraction and the
+  ¼-cell sampling are unchanged), and that does not solve it. `mazeWalk(..., other)` reports `joined` when the
+  walk (a step forward or a retraction) leaves the heads on one cell and ends there; `mazeJoined(maze, a, b)` is
+  the DOM-free test (last cell of each trail equal). The reward fires at the meeting cell. Each trail retracts
+  only along its own cells, so an overlap never disturbs the other trail.
+- Release: `pointerup` first walks the final pointer position exactly like a move (a finger whose release lands
+  on the meeting cell finishes the maze), then releases if that did not already win. `pointercancel` and
+  `lostpointercapture` (and the stray-release backstops) never walk or score; they just release.
 - pointercancel, release, resize, orientation change and mode change leave the maze recoverable (both
   trails kept, each character on its head, ready to be grabbed again; reuse the existing drag lifecycle /
   abortDrag). The svg carries `data-trail-a` (from `data-start`) and `data-trail-b` (from `data-goal`) so
@@ -59,8 +64,8 @@ vs draggable". This replaces the first spec's fixed mover and goal.
 ## Done means
 1. `node optics_test.js` passes with a new maze suite: generator (perfect, connected, unique
    solution, many seeds and all sizes), traversal (fast drag never crosses a wall; backtrack retracts),
-   joining (meet in the middle, one reaches the other's head or its body, never through a wall,
-   retraction undoes progress), and inks (every `mazeInks` colour equals `rampInk`/`inkFor` for the round's eye and keeps the ink's
+   meeting (heads meet in the middle, one reaches the other's head, walking over the other's body does not
+   solve it, overlapping trails retract correctly, never through a wall, retraction undoes progress), and inks (every `mazeInks` colour equals `rampInk`/`inkFor` for the round's eye and keeps the ink's
    ghost ratio). No existing test weakened; measured values unchanged.
 2. `python3 verify.py` PASS with the new ids registered.
 3. Playwright WebKit with touch on the Air (labelled "emulated"): every stroke/fill rendered inside

@@ -2285,10 +2285,10 @@
      order and can never skip one. The head only ever moves to a cell next to
      it through an open passage; a step into a walled-off neighbour stops the
      walk there. A step back onto the cell before the head retracts the
-     trail. `other` is the other character's trail: stepping onto any of its
-     cells (its head included) is the joining move, which is added to `trail`
-     and ends the walk with joined:true. Mutates `trail` (cell indices, head
-     last). */
+     trail. `other` is the other character's trail. Its body is walkable (the
+     trails may overlap); only the meeting counts: the head reaching the
+     other's HEAD cell ends the walk with joined:true. Mutates `trail` (cell
+     indices, head last). */
   function mazeWalk(maze, trail, from, to, cs, other){
     const n = maze.n, steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / (cs / 4)));
     let moved = 0;
@@ -2304,17 +2304,15 @@
       const cell = r * n + c;
       if (trail.length > 1 && trail[trail.length - 2] === cell) trail.pop(); else trail.push(cell);
       moved++;
-      if (other && other.indexOf(cell) >= 0) return { moved:moved, blocked:false, joined:true };
+      if (other && other.length && other[other.length - 1] === cell) return { moved:moved, blocked:false, joined:true };
     }
     return { moved:moved, blocked:false, joined:false };
   }
 
-  /* The maze is solved when the two trails share a cell: one head stepped
-     into the other's trail (mazeWalk adds that cell to the walker's trail).
-     The passages between their cells were already checked by mazeWalk. */
+  /* The maze is solved when the two characters meet: both heads on the same
+     cell. Overlapping bodies do not count. */
   function mazeJoined(maze, a, b){
-    for (let i = 0; i < a.length; i++) if (b.indexOf(a[i]) >= 0) return true;
-    return false;
+    return a.length > 0 && b.length > 0 && a[a.length - 1] === b[b.length - 1];
   }
 
   /* Every colour the maze draws, from the ramp and nowhere else. The tones
@@ -2615,7 +2613,13 @@
 
   function onDrop(e){
     if (!drag || e.pointerId !== drag.id) return;
-    if (drag.maze){ mazeRelease(); return; }
+    if (drag.maze){
+      /* A finger's last position can be the meeting cell: walk it like a
+         move. Cancel is the browser taking the gesture away: never score. */
+      if (e.type === 'pointerup') mazeMove(e);
+      if (drag) mazeRelease();
+      return;
+    }
     /* A cancelled pointer is the browser taking the gesture away, not a
        wrong answer: return the piece home without scoring a miss. */
     const cancelled = e.type === 'pointercancel';

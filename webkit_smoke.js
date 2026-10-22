@@ -516,7 +516,7 @@ async function closeSheet(page){
     await page.ctx.close();
   }
 
-  /* ===== 8. either character can be dragged; the maze is solved when the trails join ===== */
+  /* ===== 8. either character can be dragged; the maze is solved when the two characters meet ===== */
   console.log('\nthe second character');
   const legal = (I, tr, from) => {
     if (tr[0] !== from || new Set(tr).size !== tr.length) return false;
@@ -590,7 +590,8 @@ async function closeSheet(page){
   }
   {
     // one reaches the other's trail body (not its head): B detours into a side branch off the
-    // route, so its trail passes through route cell sol[k] while its head is elsewhere
+    // route, so its trail passes through route cell sol[k] while its head is elsewhere. Walking
+    // over that body is not a meeting; reaching B's head afterwards is.
     const page = await openPage(browser, { game:{ mazeN:6 } });
     let found = null, I, sol;
     for (let tries = 0; tries < 12 && !found; tries++){
@@ -612,11 +613,49 @@ async function closeSheet(page){
       I = await info(page);
       t('B\'s head is off the route and its body passes the cell next to A',
         I.trailB[I.trailB.length - 1] === found.side && I.trailB.indexOf(sol[k]) >= 0 && (await page.textContent('#hitCount')) === '0', I.trailB.join());
-      await hop(page, I, [sol[k]], false, false);
+      const bBefore = I.trailB.join();
+      await hop(page, I, [sol[k]], true, false);
       await sleep(60);
-      t('A stepping onto a cell in the middle of B\'s trail joins them',
+      I = await info(page);
+      t('A stepping onto the middle of B\'s trail does NOT solve it (no reward, tally unchanged)',
+        (await page.textContent('#hitCount')) === '0' && (await page.locator('#burst span').count()) === 0 &&
+        I.trail[I.trail.length - 1] === sol[k] && I.trailB.join() === bBefore, I.trail.join() + ' / ' + I.trailB.join());
+      await audit(page, inkOf(CAL.std, 'L'), 'overlapping trails');
+      await hop(page, I, [found.side], false, false);
+      await sleep(60);
+      t('then A reaching B\'s head solves it',
         (await page.textContent('#hitCount')) === '1' && (await page.locator('#burst span').count()) === 16);
     }
+    await page.ctx.close();
+  }
+  {
+    // the join supplied ONLY by pointerup: move to the cell before the meeting cell, then release on it
+    const page = await openPage(browser, { game:{ mazeN:3 } });
+    let I = await info(page);
+    const sol = solve(I), L = sol.length;
+    await hop(page, I, sol.slice(1, L - 1), false);                            // A one cell short of B's head, finger down
+    await sleep(60);
+    t('one cell short with the finger still down: not solved', (await page.textContent('#hitCount')) === '0' && (await page.locator('#burst span').count()) === 0);
+    await up(page, ctr(I, sol[L - 1]));
+    await sleep(60);
+    t('a release that lands on the meeting cell solves it (tally 1, reward fired)',
+      (await page.textContent('#hitCount')) === '1' && (await page.locator('#burst span').count()) === 16);
+    await page.ctx.close();
+  }
+  {
+    // pointercancel at the meeting cell never walks or scores, and the maze stays playable
+    const page = await openPage(browser, { game:{ mazeN:3 } });
+    let I = await info(page);
+    const sol = solve(I), L = sol.length;
+    await hop(page, I, sol.slice(1, L - 1), false);
+    await fire(page, 'pointercancel', ctr(I, sol[L - 1]));
+    await sleep(60);
+    I = await info(page);
+    t('pointercancel at the meeting cell does not solve it', (await page.textContent('#hitCount')) === '0' && (await page.locator('#burst span').count()) === 0 &&
+      I.trail.join() === sol.slice(0, L - 1).join(), I.trail.join());
+    await hop(page, I, [sol[L - 1]], true);
+    await sleep(60);
+    t('and a fresh drag can still finish it', (await page.textContent('#hitCount')) === '1');
     await page.ctx.close();
   }
   {
