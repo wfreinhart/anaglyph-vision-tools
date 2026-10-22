@@ -75,6 +75,12 @@
   svg .t1{fill:color-mix(in srgb, currentColor 30%, var(--bg));}
   svg .t2{fill:color-mix(in srgb, currentColor 60%, var(--bg));}
   .piece{cursor:grab;}
+  /* Maze: one svg of plain strokes (fill:none, so the svg paints nothing of
+     its own) with the field's own pointer handling on it, and the mover and
+     goal as ordinary single-ink things on top. Nothing here is a hit-area
+     rect, a mask or a frame: the only paint in a maze is the round's eye. */
+  svg.maze{position:absolute; display:block; fill:none; stroke:none; touch-action:none; cursor:grab;}
+  .mzpiece{pointer-events:none;}
   /* Held pieces move by transform only — never left/top, and never under a
      filter. See the drag note in the script. The lift is the scale in the
      transform itself, so nothing paints outside the border box. */
@@ -439,6 +445,7 @@
   @media (prefers-reduced-motion:reduce){
     #panel,#scrim{transition:none;}
     .thing.pop,.thing.shake,#burst span,.rowclear{animation:none;}
+    .mzsol{transition:none !important;}
   }
 </style>
 </head>
@@ -516,6 +523,7 @@
       <button class="chip" data-mode="blocks">Blocks</button>
       <button class="chip" data-mode="sort">Shape sorter</button>
       <button class="chip" data-mode="tap">Touch it</button>
+      <button class="chip" data-mode="maze">Maze</button>
     </div>
   </div>
 
@@ -561,6 +569,49 @@
   <div class="row hide" id="rowClearRow">
     <div class="label">Rows clear<span class="sub">A full row across the wall flashes and clears as a bonus. Turn off if it's distracting.</span></div>
     <button id="rowClears" class="toggle on" role="switch" aria-checked="true" aria-label="Rows clear"></button>
+  </div>
+
+  <div class="row hide" id="mazeSizeRow">
+    <div>
+      <div class="label">Maze size<span class="sub">8&times;8 is untested for finger size on the iPad.</span></div>
+    </div>
+    <div class="chips" id="mazeSizeChips">
+      <button class="chip on" data-n="3">3&times;3</button>
+      <button class="chip" data-n="4">4&times;4</button>
+      <button class="chip" data-n="6">6&times;6</button>
+      <button class="chip" data-n="8">8&times;8</button>
+    </div>
+  </div>
+
+  <div class="row hide" id="mazeTrailRow">
+    <div>
+      <div class="label">Trail look<span class="sub">A look, not a colour: the trail is always the same eye's ink.</span></div>
+    </div>
+    <div class="chips" id="mazeTrailChips">
+      <button class="chip on" data-look="line">Line</button>
+      <button class="chip" data-look="light">Light line</button>
+      <button class="chip" data-look="dots">Dots</button>
+    </div>
+  </div>
+
+  <div class="row hide" id="mazeWallRow">
+    <div>
+      <div class="label">Wall tone<span class="sub">Medium is fainter. Check it on the iPad before relying on it.</span></div>
+    </div>
+    <div class="chips" id="mazeWallChips">
+      <button class="chip on" data-tone="full">Full</button>
+      <button class="chip" data-tone="medium">Medium</button>
+    </div>
+  </div>
+
+  <div class="row hide" id="mazeShowRow">
+    <div class="label">Show the way<span class="sub">Draws the path through the maze, in the same eye. Turn off for a plain maze.</span></div>
+    <button id="mazeShow" class="toggle" role="switch" aria-checked="false" aria-label="Show the way"></button>
+  </div>
+
+  <div class="row hide" id="mazeSlowRow">
+    <div class="label">Draw it slowly<span class="sub">The path draws itself from the start, about half a second a square.</span></div>
+    <button id="mazeSlow" class="toggle on" role="switch" aria-checked="true" aria-label="Draw it slowly"></button>
   </div>
 
   <div class="row stack" id="packRow">
@@ -958,7 +1009,9 @@
   const intIn = (lo, hi) => v => numIn(lo, hi)(v) && v === Math.round(v);
 
   const SCHEMA = {
-    mode:oneOf(['pop','jigsaw','blocks','sort','tap']), pieces:oneOf([2,4,6,9]),
+    mode:oneOf(['pop','jigsaw','blocks','sort','tap','maze']), pieces:oneOf([2,4,6,9]),
+    mazeN:oneOf([3,4,6,8]), mazeTrail:oneOf(['line','light','dots']), mazeWall:oneOf(['full','medium']),
+    mazeShow:isBool, mazeSlow:isBool,
     taps:intIn(1,3), holes:intIn(1,3), shapeSet:oneOf(['simple','all']),
     picture:oneOf(['shapes','photo','scene']), tones:oneOf([0,2,3,4]),
     pinnedShape: v => v === null || Object.prototype.hasOwnProperty.call(SHAPES, v),
@@ -998,10 +1051,11 @@
     size:22, bg:'#ffffff',
     eyePlan:'alt', mix:false, showTag:false, sound:true, childLock:false, assist:true,
     fusion:false, holesMove:true, rowClears:true,
+    mazeN:3, mazeTrail:'line', mazeWall:'full', mazeShow:false, mazeSlow:true,
     red:'#ff0000', green:'#00ff00', pair:'green', bluePass:0, redBlue:0, redSide:'L',
     hits:0, misses:0, round:0, curEye:'L', goal:null, t0:0
   }, sanitize(store.get(CALIB_KEY, {})), sanitize(store.get(GAME_KEY, {})));
-  state.hits = 0; state.misses = 0; state.round = 0;
+  state.hits = 0; state.misses = 0; state.round = 0; state.mazeWins = 0;
 
   let calibBg = state.bg;
 
@@ -1168,7 +1222,7 @@
   /* Pop! keeps the whole field for its moving targets: a bubble rising
      behind the dock would be partly covered by binocular chrome, which marks
      its position for the eye that is not meant to see it. */
-  function dockShown(){ return !state.childLock && state.mode !== 'pop'; }
+  function dockShown(){ return !state.childLock && state.mode !== 'pop' && state.mode !== 'maze'; }
   function bottomClear(){ return dockShown() ? 104 : 12; }
 
   function sizePx(){
@@ -1217,8 +1271,8 @@
     return out;
   }
 
-  function makeThing(shape, color, cls, pos){
-    const s = sizePx();
+  function makeThing(shape, color, cls, pos, px){
+    const s = px || sizePx();
     const el = document.createElement('div');
     el.className = 'thing ' + cls;
     el.dataset.shape = shape;
@@ -1274,6 +1328,7 @@
     abortDrag('rebuild', true);
     field.innerHTML = '';
     jigCells = [];
+    mz = null;
     state.curEye = nextEye();
     state.round += 1;
 
@@ -1281,6 +1336,7 @@
     else if (state.mode === 'jigsaw') buildJigsaw();
     else if (state.mode === 'blocks') buildBlocks();
     else if (state.mode === 'sort') buildSort();
+    else if (state.mode === 'maze') buildMaze();
     else buildTap();
 
     state.t0 = performance.now();
@@ -2157,6 +2213,272 @@
     popQuietUntil = popSpawnAt;
   }
 
+  /* ---------- maze ----------
+     He drags the mover along the corridors to the goal. Everything drawn —
+     walls, trail, the way, mover, goal — is the round's one eye, on the
+     field-to-ink ramp via mazeInks() and nothing else: no mask, halo,
+     frame, opacity or shadow, so no position cue can reach the other eye.
+     "Colours" are looks of the same ink (a tone, a line style), never a
+     second ink. The reward after the goal is the only binocular paint.
+
+     The generator and the walker below touch neither the DOM nor `state`,
+     so optics_test.js can lift them and prove them over many seeds. */
+  function mazeRng(seed){
+    let a = seed >>> 0;
+    return function(){
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* Perfect maze by recursive backtracker: every cell reachable, n*n-1
+     passages, one route between any two cells. open[i] holds the passages
+     of cell i = r*n + c as bits N=1 E=2 S=4 W=8. The route always runs
+     between opposite corners. */
+  function makeMaze(n, seed){
+    const rnd = mazeRng(seed), open = new Array(n * n).fill(0), seen = new Array(n * n).fill(false);
+    const D = [[0, -1, 1, 4], [1, 0, 2, 8], [0, 1, 4, 1], [-1, 0, 8, 2]];
+    const stack = [0];
+    seen[0] = true;
+    while (stack.length){
+      const at = stack[stack.length - 1], c = at % n, r = (at - c) / n;
+      const opts = D.filter(d => {
+        const cc = c + d[0], rr = r + d[1];
+        return cc >= 0 && cc < n && rr >= 0 && rr < n && !seen[rr * n + cc];
+      });
+      if (!opts.length){ stack.pop(); continue; }
+      const d = opts[Math.floor(rnd() * opts.length)], to = (r + d[1]) * n + c + d[0];
+      open[at] |= d[2]; open[to] |= d[3];
+      seen[to] = true;
+      stack.push(to);
+    }
+    const last = n * n - 1, corner = [[0, last], [n - 1, n * n - n], [n * n - n, n - 1], [last, 0]][Math.floor(rnd() * 4)];
+    return { n:n, open:open, start:corner[0], goal:corner[1] };
+  }
+
+  /* The cells from start to goal, inclusive. */
+  function mazeSolve(maze){
+    const n = maze.n, from = new Array(n * n).fill(-1), queue = [maze.start];
+    from[maze.start] = maze.start;
+    for (let k = 0; k < queue.length; k++){
+      const at = queue[k], c = at % n, r = (at - c) / n;
+      [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]].forEach(d => {
+        const to = (r + d[1]) * n + c + d[0];
+        if ((maze.open[at] & d[2]) && from[to] < 0){ from[to] = at; queue.push(to); }
+      });
+    }
+    const path = [maze.goal];
+    while (path[0] !== maze.start && from[path[0]] >= 0) path.unshift(from[path[0]]);
+    return path;
+  }
+
+  /* Walks the trail along the straight line from one pointer point to the
+     next (maze pixels, origin at the top-left corner, cell side cs) in steps
+     of at most a quarter cell, so a fast flick passes through each cell in
+     order and can never skip one. The head only ever moves to a cell next to
+     it through an open passage; a step into a walled-off neighbour stops the
+     walk there. A step back onto the cell before the head retracts the
+     trail. Mutates `trail` (cell indices, head last). */
+  function mazeWalk(maze, trail, from, to, cs){
+    const n = maze.n, steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / (cs / 4)));
+    let moved = 0;
+    for (let i = 1; i <= steps; i++){
+      const x = from.x + (to.x - from.x) * i / steps, y = from.y + (to.y - from.y) * i / steps;
+      const c = Math.floor(x / cs), r = Math.floor(y / cs);
+      if (c < 0 || c >= n || r < 0 || r >= n) continue;
+      const head = trail[trail.length - 1], dc = c - head % n, dr = r - Math.floor(head / n);
+      /* The head's own cell, a corner, or off the grid: nothing to do. */
+      if (Math.abs(dc) + Math.abs(dr) !== 1) continue;
+      const bit = dr < 0 ? 1 : (dc > 0 ? 2 : (dr > 0 ? 4 : 8));
+      if (!(maze.open[head] & bit)) return { moved:moved, blocked:true };
+      const cell = r * n + c;
+      if (trail.length > 1 && trail[trail.length - 2] === cell) trail.pop(); else trail.push(cell);
+      moved++;
+    }
+    return { moved:moved, blocked:false };
+  }
+
+  /* Every colour the maze draws, from the ramp and nowhere else. The tones
+     are the same eye's ink at a fraction of the way from the field, so each
+     keeps the ink's leak ratio (see rampInk). */
+  function mazeInks(eye){
+    const full = inkFor(eye);
+    return {
+      wall:     state.mazeWall === 'medium' ? rampInk(eye, 0.6) : full,
+      trail:    state.mazeTrail === 'light' ? rampInk(eye, 0.6) : full,
+      solution: rampInk(eye, 0.45),
+      mover:    full,
+      goal:     full
+    };
+  }
+
+  let mz = null;
+  const SVGNS = 'http://www.w3.org/2000/svg';
+
+  function buildMaze(){
+    const maze = makeMaze(state.mazeN, (Math.random() * 4294967296) >>> 0);
+    const art = pickShapes(2, null).shapes;
+    state.goal = art[1];
+    mz = { maze:maze, trail:[maze.start], mover:art[0], goalShape:art[1], done:false,
+           solution:mazeSolve(maze), svg:null, cs:0, pad:0, ox:0, oy:0 };
+    mazeDraw(true);
+  }
+
+  /* (Re)draws the maze from `mz` alone, so a resize keeps his trail. */
+  function mazeDraw(animate){
+    abortDrag('rebuild', true);
+    field.innerHTML = '';
+    const m = mz.maze, n = m.n, eye = state.curEye, ink = mazeInks(eye);
+    const w = field.clientWidth, h = field.clientHeight, pad = 14;
+    const top = HUD_CLEARANCE, bottom = h - bottomClear();
+    const cs = Math.max(8, Math.floor(Math.min(w - 2 * pad, bottom - top) / n)), side = cs * n;
+    const ww = Math.max(4, Math.round(cs * 0.1)), edge = ww;
+    mz.cs = cs; mz.pad = edge;
+    mz.ox = Math.round((w - side) / 2);
+    mz.oy = Math.round(top + (bottom - top - side) / 2);
+
+    const svg = document.createElementNS(SVGNS, 'svg');
+    svg.setAttribute('class', 'maze');
+    svg.setAttribute('viewBox', [-edge, -edge, side + 2 * edge, side + 2 * edge].join(' '));
+    svg.style.left = (mz.ox - edge) + 'px';
+    svg.style.top = (mz.oy - edge) + 'px';
+    svg.style.width = (side + 2 * edge) + 'px';
+    svg.style.height = (side + 2 * edge) + 'px';
+    svg.setAttribute('aria-hidden', 'true');
+    field.appendChild(svg);
+    mz.svg = svg;
+    const stroke = (cls, color, width, extra) => {
+      const p = document.createElementNS(SVGNS, 'path');
+      p.setAttribute('class', cls);
+      p.setAttribute('fill', 'none');
+      p.setAttribute('stroke', color);
+      p.setAttribute('stroke-width', String(width));
+      Object.keys(extra).forEach(k => p.setAttribute(k, extra[k]));
+      svg.appendChild(p);
+      return p;
+    };
+
+    /* Walls: the outer square, then every closed passage. Square caps make
+       the joins flush with the outside of the outer wall. */
+    let d = 'M0 0H' + side + 'V' + side + 'H0Z';
+    for (let r = 0; r < n; r++){
+      for (let c = 0; c < n; c++){
+        const x = c * cs, y = r * cs, i = r * n + c;
+        if (c < n - 1 && !(m.open[i] & 2)) d += 'M' + (x + cs) + ' ' + y + 'V' + (y + cs);
+        if (r < n - 1 && !(m.open[i] & 4)) d += 'M' + x + ' ' + (y + cs) + 'H' + (x + cs);
+      }
+    }
+    stroke('mzwall', ink.wall, ww, { d:d, 'stroke-linecap':'square', 'stroke-linejoin':'miter' });
+
+    /* The way: narrower than the corridor, so it never touches a wall.
+       Revealed start to goal by sliding the dash, one colour throughout. */
+    if (state.mazeShow){
+      const len = (mz.solution.length - 1) * cs;
+      const sol = stroke('mzsol', ink.solution, Math.max(3, Math.round(cs * 0.1)),
+                         { d:mazePathD(mz.solution), 'stroke-linecap':'butt', 'stroke-linejoin':'round' });
+      if (animate && state.mazeSlow && len > 0){
+        sol.style.strokeDasharray = len + ' ' + len;
+        sol.style.strokeDashoffset = String(len);
+        void sol.getBoundingClientRect();
+        sol.style.transition = 'stroke-dashoffset ' + (len / cs * 0.5) + 's linear';
+        sol.style.strokeDashoffset = '0';
+      }
+    }
+
+    const tw = Math.max(4, Math.round(cs * 0.2));
+    mz.trailPath = stroke('mztrail', ink.trail, tw, state.mazeTrail === 'dots'
+      ? { 'stroke-linecap':'round', 'stroke-linejoin':'round', 'stroke-dasharray':'0 ' + Math.round(tw * 1.7) }
+      : { 'stroke-linecap':'round', 'stroke-linejoin':'round' });
+
+    const ps = Math.round(cs * 0.62);
+    mz.ps = ps;
+    mz.goalEl = makeThing(mz.goalShape, ink.goal, 'mzpiece mzgoal', mazeCenter(m.goal), ps);
+    mz.moverEl = makeThing(mz.mover, ink.mover, 'mzpiece mzmover', mazeCenter(mz.trail[mz.trail.length - 1]), ps);
+    svg.dataset.n = String(n);
+    svg.dataset.cs = String(cs);
+    svg.dataset.open = m.open.join(',');
+    svg.dataset.start = String(m.start);
+    svg.dataset.goal = String(m.goal);
+    svg.addEventListener('pointerdown', onMazeDown);
+    mazeSync();
+  }
+
+  /* Cell centre in field pixels. */
+  function mazeCenter(i){
+    const n = mz.maze.n, c = i % n, r = (i - c) / n;
+    return { x: mz.ox + (c + 0.5) * mz.cs, y: mz.oy + (r + 0.5) * mz.cs };
+  }
+
+  /* A polyline through cell centres, in maze pixels. */
+  function mazePathD(cells){
+    const n = mz.maze.n;
+    return cells.map((i, k) => (k ? 'L' : 'M') + ((i % n + 0.5) * mz.cs) + ' ' + ((Math.floor(i / n) + 0.5) * mz.cs)).join('');
+  }
+
+  /* The mover always sits on the trail head. */
+  function mazeSync(){
+    const head = mz.trail[mz.trail.length - 1], at = mazeCenter(head);
+    mz.trailPath.setAttribute('d', mz.trail.length > 1 ? mazePathD(mz.trail) : '');
+    mz.moverEl.style.left = (at.x - mz.ps / 2) + 'px';
+    mz.moverEl.style.top  = (at.y - mz.ps / 2) + 'px';
+    mz.svg.dataset.trail = mz.trail.join(',');
+  }
+
+  function mazeLocal(e){
+    const r = mz.svg.getBoundingClientRect();
+    return { x: e.clientX - r.left - mz.pad, y: e.clientY - r.top - mz.pad };
+  }
+
+  /* Grab the mover from a generous radius round it: a three year old's
+     fingertip is a poor pointer. Same single-owner `drag` as every other
+     mode, so abortDrag and the stray-release backstops cover it. */
+  function onMazeDown(e){
+    audio();
+    if (!mz || mz.done || drag) return;
+    const p = mazeLocal(e), head = mz.trail[mz.trail.length - 1], c = mazeCenter(head);
+    const at = { x: c.x - mz.ox, y: c.y - mz.oy };
+    if (Math.hypot(p.x - at.x, p.y - at.y) > mz.cs * 0.8) return;
+    drag = { el:mz.svg, id:e.pointerId, maze:true, last:p };
+    try{ mz.svg.setPointerCapture(e.pointerId); }catch(_){}
+    mz.svg.addEventListener('pointermove', onDrag);
+    mz.svg.addEventListener('pointerup', onDrop);
+    mz.svg.addEventListener('pointercancel', onDrop);
+    mz.svg.addEventListener('lostpointercapture', onLost);
+  }
+
+  function mazeMove(e){
+    const p = mazeLocal(e);
+    const r = mazeWalk(mz.maze, mz.trail, drag.last, p, mz.cs);
+    drag.last = p;
+    if (r.moved) mazeSync();
+    if (mz.trail[mz.trail.length - 1] === mz.maze.goal) mazeWin();
+  }
+
+  /* Up or cancel: nothing to put back, the mover is already on the head. */
+  function mazeRelease(){
+    const el = drag.el;
+    drag = null;
+    el.removeEventListener('pointermove', onDrag);
+    el.removeEventListener('pointerup', onDrop);
+    el.removeEventListener('pointercancel', onDrop);
+    el.removeEventListener('lostpointercapture', onLost);
+  }
+
+  function mazeWin(){
+    mz.done = true;
+    if (drag) mazeRelease();
+    /* The tally ticks so the pips fill, but a maze is not an answer: the
+       stats line counts it apart from the right/wrong of a target. */
+    state.hits += 1; state.mazeWins += 1;
+    sayYes(); buzz(12);
+    paintHud();
+    celebrate(mazeCenter(mz.maze.goal));
+    setTimeout(newRound, 1400);
+  }
+
   /* ---------- interaction ---------- */
   function onTap(e){
     e.stopPropagation();
@@ -2206,7 +2528,7 @@
   const dragAborts = window.dragAborts = {};
   function abortDrag(reason, rebuilding){
     if (!drag) return;
-    const el = drag.el;
+    const el = drag.el, wasMaze = drag.maze;
     drag = null;
     dragAborts[reason] = (dragAborts[reason] || 0) + 1;
     console.warn('drag aborted:', reason);
@@ -2214,6 +2536,7 @@
     el.removeEventListener('pointerup', onDrop);
     el.removeEventListener('pointercancel', onDrop);
     el.removeEventListener('lostpointercapture', onLost);
+    if (wasMaze) return;             // the mover already sits on the trail head
     el.style.transform = '';
     el.classList.remove('held');
     litRegions(false, el);
@@ -2231,6 +2554,7 @@
 
   function onDrag(e){
     if (!drag || e.pointerId !== drag.id) return;
+    if (drag.maze){ mazeMove(e); return; }
     drag.el.style.transform = 'translate3d(' + (e.clientX - drag.sx) + 'px,' +
                               (e.clientY - drag.sy) + 'px,0) scale(1.05)';
   }
@@ -2262,6 +2586,7 @@
 
   function onDrop(e){
     if (!drag || e.pointerId !== drag.id) return;
+    if (drag.maze){ mazeRelease(); return; }
     /* A cancelled pointer is the browser taking the gesture away, not a
        wrong answer: return the piece home without scoring a miss. */
     const cancelled = e.type === 'pointercancel';
@@ -2477,7 +2802,8 @@
       return;
     }
     const name = { L:'left ', R:'right', both:'both ' };
-    const lines = ['this session   ' + state.hits + ' right, ' + state.misses + ' wrong', ''];
+    const lines = ['this session   ' + (state.hits - state.mazeWins) + ' right, ' + state.misses + ' wrong' +
+                   (state.mazeWins ? ', ' + state.mazeWins + (state.mazeWins === 1 ? ' maze' : ' mazes') : ''), ''];
     Object.keys(day).sort().forEach(eye => {
       const e = isPlain(day[eye]) ? day[eye] : {};
       const hits = num(e.hits), misses = num(e.misses), tot = num(e.ms);
@@ -2518,7 +2844,7 @@
       $('promptText').textContent = left === 0 ? 'Done' : left + ' to go';
       return;
     }
-    if (state.mode === 'pop'){ p.classList.add('hide'); return; }
+    if (state.mode === 'pop' || state.mode === 'maze'){ p.classList.add('hide'); return; }
     const many = state.mode === 'tap' ? state.taps > 1 : state.holes > 1;
     p.classList.toggle('hide', !(many && state.goal));
     if (many && state.goal){
@@ -2598,18 +2924,21 @@
     $('sortRow').classList.toggle('hide', state.mode !== 'sort');
     $('moveRow').classList.toggle('hide', state.mode !== 'sort');
     $('rowClearRow').classList.toggle('hide', state.mode !== 'blocks');
+    ['mazeSizeRow', 'mazeTrailRow', 'mazeWallRow', 'mazeShowRow', 'mazeSlowRow']
+      .forEach(id => $(id).classList.toggle('hide', state.mode !== 'maze'));
+    $('mazeSlowRow').classList.toggle('off', !state.mazeShow);
     /* Packs and shape set only matter where a round draws built-in shapes:
        not Blocks (tetrominoes), not a Jigsaw showing a photo or scene. */
     const usesShapes = state.mode !== 'blocks' && !(state.mode === 'jigsaw' && usePicture());
     $('packRow').classList.toggle('hide', !usesShapes);
     $('shapeSetRow').classList.toggle('hide', !usesShapes);
-    $('sizeRow').classList.toggle('off', gridded);
+    $('sizeRow').classList.toggle('off', gridded || state.mode === 'maze');
     $('mixRow').classList.toggle('off', state.mode !== 'tap' || state.taps < 2);
     $('assistRow').classList.toggle('off', state.mode !== 'blocks');
     /* Tap mode has nowhere to put the cue: its goal sits in the HUD chip,
        whose translucent background is not the field colour, so an ink
        drawn there would not carry its calculated contrast. */
-    $('fusionRow').classList.toggle('off', state.mode === 'tap' || state.mode === 'pop');
+    $('fusionRow').classList.toggle('off', state.mode === 'tap' || state.mode === 'pop' || state.mode === 'maze');
     /* A single-eye plan still works — pieces to that eye, cues to the other.
        Only "Both" degenerates, because there is no other eye to cue with. */
     if (state.fusion && state.eyePlan === 'both'){
@@ -2620,6 +2949,7 @@
     : state.mode === 'jigsaw' ? 'Build the picture, one piece at a time.'
     : state.mode === 'blocks' ? 'Drop each block into the hole it fits.'
     : state.mode === 'sort'   ? 'Drag the piece onto the hole that matches it.'
+    : state.mode === 'maze'   ? 'Drag the character through the maze to the goal.'
     :                           'Touch the shape wherever it lands.';
     $('eyeNote').textContent = state.eyePlan === 'alt'
       ? (gridded ? 'Half the pieces per eye. He picks the order, so it is a mix, not a sequence.'
@@ -2659,6 +2989,7 @@
       shapeSet:state.shapeSet, pinnedShape:state.pinnedShape, packs:state.packs, size:state.size, bg:state.bg, eyePlan:state.eyePlan,
       mix:state.mix, showTag:state.showTag, sound:state.sound, childLock:state.childLock,
       assist:state.assist, fusion:state.fusion, holesMove:state.holesMove, rowClears:state.rowClears,
+      mazeN:state.mazeN, mazeTrail:state.mazeTrail, mazeWall:state.mazeWall, mazeShow:state.mazeShow, mazeSlow:state.mazeSlow,
       picture:state.picture, tones:state.tones, picBias:state.picBias, picContrast:state.picContrast, picIdx:state.picIdx
     });
     store.set(CALIB_KEY, {
@@ -2699,6 +3030,9 @@
   group('tapChips',   btn => { state.taps = Number(btn.dataset.n); });
   group('holeChips',  btn => { state.holes = Number(btn.dataset.n); });
   group('shapeChips', btn => { state.shapeSet = btn.dataset.set; });
+  group('mazeSizeChips',  btn => { state.mazeN = Number(btn.dataset.n); });
+  group('mazeTrailChips', btn => { state.mazeTrail = btn.dataset.look; });
+  group('mazeWallChips',  btn => { state.mazeWall = btn.dataset.tone; });
 
   /* Packs are multi-select — group() is exclusive-select, so this is wired
      by hand. One pack always has to stay on, or shapePool() has nothing to
@@ -2749,6 +3083,11 @@
   toggle('fusion', 'fusion', () => { paint(); newRound(); });
   toggle('holesMove', 'holesMove', () => { paint(); newRound(); });
   toggle('rowClears', 'rowClears');
+  /* Redraws the maze already on screen (same maze, same trail) so the way
+     shows or hides at once; closing the sheet deals a fresh one anyway. */
+  const mazeRefresh = () => { paint(); if (state.mode === 'maze' && mz && !mz.done) mazeDraw(true); };
+  toggle('mazeShow', 'mazeShow', mazeRefresh);
+  toggle('mazeSlow', 'mazeSlow', mazeRefresh);
 
   /* Also the load-time sync: settings restored from storage have to show up
      on the controls, or the sheet lies about what the game is doing. */
@@ -2775,7 +3114,10 @@
     $('contrastVal').textContent = state.picContrast;
     mark('#tapChips .chip', 'n', String(state.taps));
     mark('#holeChips .chip', 'n', String(state.holes));
-    [['mixEyes','mix'], ['showTag','showTag'], ['sound','sound'], ['childLock','childLock'],
+    mark('#mazeSizeChips .chip', 'n', String(state.mazeN));
+    mark('#mazeTrailChips .chip', 'look', state.mazeTrail);
+    mark('#mazeWallChips .chip', 'tone', state.mazeWall);
+    [['mixEyes','mix'], ['mazeShow','mazeShow'], ['mazeSlow','mazeSlow'], ['showTag','showTag'], ['sound','sound'], ['childLock','childLock'],
      ['assist','assist'], ['fusion','fusion'], ['holesMove','holesMove'], ['rowClears','rowClears']]
       .forEach(([id, key]) => {
         $(id).classList.toggle('on', !!state[key]);
@@ -2951,7 +3293,7 @@
     const pop = readPop();
     delete pop[today()];
     store.set(POP_KEY, pop);
-    state.hits = 0; state.misses = 0;
+    state.hits = 0; state.misses = 0; state.mazeWins = 0;
     paint();
   });
 
@@ -3018,7 +3360,11 @@
     /* Never rebuild under his finger: wait for the piece to be let go. */
     const later = () => {
       if (drag){ resizeTimer = setTimeout(later, 250); return; }
-      if (!panel.classList.contains('on')) newRound();
+      if (panel.classList.contains('on')) return;
+      /* A maze is laid out again from the same maze and trail, not dealt a
+         new one: turning the iPad should not cost him his place. */
+      if (state.mode === 'maze' && mz && !mz.done){ mazeDraw(false); return; }
+      newRound();
     };
     resizeTimer = setTimeout(later, 220);
   });
@@ -3035,10 +3381,13 @@
   });
   window.addEventListener('pagehide', () => abortDrag('hidden'));
 
-  /* Demo link: puzzle.html#pop starts Pop! with all four character packs on (Ice Age, Mario, Mickey, Young Jedi)
+  /* Demo links: puzzle.html#maze opens Maze. puzzle.html#pop starts Pop! with all four character packs on (Ice Age, Mario, Mickey, Young Jedi)
      unless packs were already chosen in Settings.
      In memory only until a setting is touched, like any other change. */
   function demoHash(){
+    /* #maze opens Maze and nothing else: every saved choice (packs, eyes,
+       look) is left exactly as the parent set it. */
+    if (location.hash === '#maze'){ state.mode = 'maze'; return true; }
     if (location.hash !== '#pop') return false;
     state.mode = 'pop';
     /* Only when no pack choice has been saved: a parent's own pick from

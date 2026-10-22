@@ -257,6 +257,209 @@ function guardSuite(label, g, m){
     m.inkFor('L','#ffffff') !== m.inkFor('R','#ffffff'));
 }
 
+/* puzzle.html only — Maze mode. Three things: the generator and walker
+   (lifted whole, they touch no DOM and no state), the inks (every colour the
+   maze draws is the round's eye on the ramp), and a static read of the maze
+   source for the rules that cannot be run here (no opacity, filters,
+   shadows, blend modes or hand-picked colours on the play surface). */
+function mazeSuite(label, m, g){
+  const t = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? '  ok   ' : '  FAIL ') + name); };
+  console.log('\n' + label + ' — maze');
+  const SIZES = [3, 4, 6, 8], SEEDS = 250;
+  const bits = v => (v & 1) + ((v >> 1) & 1) + ((v >> 2) & 1) + ((v >> 3) & 1);
+  const nb = (maze, i) => {
+    const n = maze.n, c = i % n, r = (i - c) / n, out = [];
+    [[0,-1,1],[1,0,2],[0,1,4],[-1,0,8]].forEach(d => {
+      if (maze.open[i] & d[2]) out.push((r + d[1]) * n + c + d[0]);
+    });
+    return out;
+  };
+  /* trail invariant: starts at start, no repeats, each step an open passage */
+  const sound = (maze, trail) => {
+    if (trail[0] !== maze.start) return false;
+    if (new Set(trail).size !== trail.length) return false;
+    for (let k = 1; k < trail.length; k++) if (nb(maze, trail[k - 1]).indexOf(trail[k]) < 0) return false;
+    return true;
+  };
+  const countRoutes = maze => {          // simple paths start -> goal
+    let found = 0;
+    const seen = new Set([maze.start]);
+    (function go(at){
+      if (at === maze.goal){ found++; return; }
+      nb(maze, at).forEach(to => { if (!seen.has(to)){ seen.add(to); go(to); seen.delete(to); } });
+    })(maze.start);
+    return found;
+  };
+
+  console.log('  generator: ' + SEEDS + ' seeds at each of ' + SIZES.join(', '));
+  SIZES.forEach(n => {
+    let perfect = true, connected = true, unique = true, corners = true, symmetric = true, solved = true;
+    const seen = new Set();
+    for (let seed = 0; seed < SEEDS; seed++){
+      const mz = m.makeMaze(n, seed * 2654435761 % 4294967296);
+      let edges = 0;
+      mz.open.forEach((v, i) => {
+        edges += bits(v);
+        const c = i % n, r = (i - c) / n;
+        if (((v & 1) && r === 0) || ((v & 4) && r === n - 1) || ((v & 2) && c === n - 1) || ((v & 8) && c === 0)) symmetric = false;
+        if ((v & 2) && !(mz.open[i + 1] & 8)) symmetric = false;
+        if ((v & 4) && !(mz.open[i + n] & 1)) symmetric = false;
+      });
+      if (edges / 2 !== n * n - 1) perfect = false;
+      const reach = new Set([mz.start]), q = [mz.start];
+      for (let k = 0; k < q.length; k++) nb(mz, q[k]).forEach(to => { if (!reach.has(to)){ reach.add(to); q.push(to); } });
+      if (reach.size !== n * n) connected = false;
+      if (countRoutes(mz) !== 1) unique = false;
+      const cs = [0, n - 1, n * n - n, n * n - 1];
+      const opp = { 0:n * n - 1, [n - 1]:n * n - n, [n * n - n]:n - 1, [n * n - 1]:0 };
+      if (cs.indexOf(mz.start) < 0 || opp[mz.start] !== mz.goal) corners = false;
+      const path = m.mazeSolve(mz);
+      if (path[0] !== mz.start || path[path.length - 1] !== mz.goal || !sound(mz, path)) solved = false;
+      seen.add(mz.open.join(','));
+    }
+    t(n + 'x' + n + ': every maze is perfect (n*n-1 passages)', perfect);
+    t(n + 'x' + n + ': every cell reachable', connected);
+    t(n + 'x' + n + ': exactly one route start to goal', unique);
+    t(n + 'x' + n + ': passages are mutual and none leads off the grid', symmetric);
+    t(n + 'x' + n + ': start and goal are opposite corners', corners);
+    t(n + 'x' + n + ': mazeSolve returns that route', solved);
+    t(n + 'x' + n + ': seeds give different mazes', seen.size > (n === 3 ? 4 : 50));
+  });
+  t('same seed, same maze', JSON.stringify(m.makeMaze(6, 12345)) === JSON.stringify(m.makeMaze(6, 12345)));
+
+  console.log('  traversal');
+  let fastSafe = true, followed = true, backtracked = true, wallStops = true, wallsSeen = 0, hopsOk = true;
+  const rnd = m.mazeRng(99);
+  SIZES.forEach(n => {
+    const cs = 60;
+    for (let seed = 1; seed <= 60; seed++){
+      const mz = m.makeMaze(n, seed);
+      const ctr = i => ({ x:(i % n + 0.5) * cs, y:(Math.floor(i / n) + 0.5) * cs });
+
+      /* A hostile finger: huge jumps all over (and off) the grid. */
+      let trail = [mz.start], last = ctr(mz.start);
+      for (let k = 0; k < 300; k++){
+        const p = { x:(rnd() * 1.6 - 0.3) * n * cs, y:(rnd() * 1.6 - 0.3) * n * cs };
+        m.mazeWalk(mz, trail, last, p, cs);
+        last = p;
+        if (!sound(mz, trail)) fastSafe = false;
+      }
+
+      /* Straight through every wall at each head along the route, from the
+         cell centre and far past it. */
+      const walk = m.mazeSolve(mz);
+      for (let k = 0; k < walk.length; k++){
+        const head = walk[k];
+        trail = walk.slice(0, k + 1);
+        const hc = ctr(head);
+        [[0,-1,1],[1,0,2],[0,1,4],[-1,0,8]].forEach(d => {
+          if (mz.open[head] & d[2]) return;
+          wallsSeen++;
+          const before = trail.slice();
+          const r = m.mazeWalk(mz, trail, hc, { x:hc.x + d[0] * cs * 3, y:hc.y + d[1] * cs * 3 }, cs);
+          /* Off the grid there is nothing to stop at; inside it the walk must say so. */
+          const c = head % n + d[0], rr = Math.floor(head / n) + d[1];
+          const inside = c >= 0 && c < n && rr >= 0 && rr < n;
+          if (trail.join() !== before.join() || (inside && !r.blocked)) wallStops = false;
+        });
+      }
+
+      /* One hop per cell along the route reaches the goal. */
+      trail = [mz.start]; last = ctr(mz.start);
+      walk.slice(1).forEach(i => { m.mazeWalk(mz, trail, last, ctr(i), cs); last = ctr(i); });
+      if (trail.join() !== walk.join()) followed = false;
+
+      /* Back along the route retracts it, step by step, and stops at the start. */
+      for (let k = walk.length - 2; k >= 0; k--){
+        m.mazeWalk(mz, trail, last, ctr(walk[k]), cs); last = ctr(walk[k]);
+        if (trail.join() !== walk.slice(0, k + 1).join()) backtracked = false;
+      }
+      m.mazeWalk(mz, trail, last, { x:mz.start % n ? n * cs + 500 : -500, y:mz.start >= n ? n * cs + 500 : -500 }, cs);
+      if (trail.join() !== String(mz.start)) backtracked = false;
+
+      /* One huge flick from the start centre to the goal centre. */
+      trail = [mz.start];
+      m.mazeWalk(mz, trail, ctr(mz.start), ctr(mz.goal), cs);
+      if (!sound(mz, trail)) hopsOk = false;
+    }
+  });
+  t('a hostile finger (300 huge jumps per maze) never breaks the trail', fastSafe);
+  t('a flick through ' + wallsSeen + ' walls stops dead at each', wallStops && wallsSeen > 0);
+  t('one flick start to goal leaves a sound trail', hopsOk);
+  t('hopping cell by cell along the route reaches the goal', followed);
+  t('going back along the trail retracts it, down to the start', backtracked);
+
+  console.log('  inks');
+  const states = [
+    { pair:'green', bluePass:0, red:'#ff0000', green:'#00ff00', redSide:'L', bg:'#ffffff' },
+    { pair:'cyan', bluePass:1, red:'#ff2ecb', green:'#2effe7', redSide:'R', bg:'#ffffff' }
+  ];
+  let onRamp = true, ratioKept = true, nCol = 0;
+  states.forEach((base, si) => {
+    ['line', 'light', 'dots'].forEach(trail => ['full', 'medium'].forEach(wall => ['L', 'R', 'both'].forEach(eye => {
+      m.setBg('#ffffff');
+      m.setState(Object.assign({}, base, { mazeTrail:trail, mazeWall:wall }));
+      const ink = m.mazeInks(eye);
+      const allowed = [m.inkFor(eye), m.rampInk(eye, 0.6), m.rampInk(eye, 0.45)];
+      const keys = Object.keys(ink);
+      if (keys.slice().sort().join() !== 'goal,mover,solution,trail,wall') onRamp = false;
+      keys.forEach(k => {
+        nCol++;
+        if (allowed.indexOf(ink[k]) < 0) onRamp = false;
+        if (!/^#[0-9a-f]{6}$/.test(ink[k])) onRamp = false;
+        if (eye !== 'both' && si === 1){
+          const full = m.visible('cyan', m.inkFor(eye)) / m.visible('red', m.inkFor(eye));
+          const r = m.visible('cyan', ink[k]) / m.visible('red', ink[k]);
+          if (Math.abs(r - full) > 0.002) ratioKept = false;
+        }
+      });
+      if (ink.mover !== m.inkFor(eye) || ink.goal !== m.inkFor(eye)) onRamp = false;
+      if (ink.solution !== m.rampInk(eye, 0.45)) onRamp = false;
+      if (ink.wall !== (wall === 'medium' ? m.rampInk(eye, 0.6) : m.inkFor(eye))) onRamp = false;
+      if (ink.trail !== (trail === 'light' ? m.rampInk(eye, 0.6) : m.inkFor(eye))) onRamp = false;
+    })));
+  });
+  t('all ' + nCol + ' maze colours are inkFor or rampInk of the round\'s eye', onRamp);
+  t('every maze colour keeps the ink\'s ghost ratio (measured cyan/magenta)', ratioKept);
+  m.setState(Object.assign({}, states[0], { mazeTrail:'line', mazeWall:'full' }));
+  t('left and right eyes get different maze ink', m.mazeInks('L').wall !== m.mazeInks('R').wall);
+  t('the way is fainter than the walls', m.visible('green', m.mazeInks('R').solution) < m.visible('green', m.mazeInks('R').wall));
+
+  console.log('  source rules');
+  const src = fs.readFileSync('puzzle.html', 'utf8');
+  const a = src.indexOf('/* ---------- maze ----------'), b = src.indexOf('/* ---------- interaction ----------');
+  const mazeSrc = src.slice(a, b);
+  t('maze section found', a > 0 && b > a);
+  const code = mazeSrc.replace(/\/\*[\s\S]*?\*\//g, '');
+  t('no colour literal in the maze code', !/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(code));
+  t('no opacity, filter, shadow, blend or mask in the maze code',
+    !/opacity|style\.filter|filter:|shadow|blend|mask|backdrop/i.test(code));
+  t('every svg paint is an ink from mazeInks', [...code.matchAll(/stroke\('[a-z]+', ([^,]+),/g)].every(x => /^ink\.[a-z]+$/.test(x[1])) &&
+    [...code.matchAll(/stroke\('[a-z]+', /g)].length === 3);
+  t('mover and goal take their colour from mazeInks', /makeThing\(mz\.goalShape, ink\.goal,/.test(code) && /makeThing\(mz\.mover, ink\.mover,/.test(code));
+  ['mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalk'].forEach(name => {
+    const fnSrc = braceBlock(src, 'function ' + name + '(');
+    t(name + ' touches no DOM and no state', !/\b(document|window|state|field|mz)\b/.test(fnSrc));
+  });
+  const css = [...src.matchAll(/(?:svg\.maze|\.mzpiece|\.mzsol)\s*\{[^}]*\}/g)].map(x => x[0]).join('\n');
+  t('maze css rules exist', css.length > 0);
+  t('maze css has no opacity, filter, shadow, background or border',
+    !/opacity|filter|shadow|background|border|blend|backdrop/i.test(css));
+  t('the svg paints nothing of its own (fill none, stroke none)', /svg\.maze\{[^}]*fill:none;[^}]*stroke:none/.test(src));
+  t('no hit-area rect in the maze code', !/createElementNS\(SVGNS, 'rect'\)|<rect/.test(code));
+  t('no frame or border drawn around the play surface for the maze', !/frame|border/i.test(code));
+
+  console.log('  wiring');
+  const gs = g.sanitize;
+  const goodMaze = { mode:'maze', mazeN:6, mazeTrail:'dots', mazeWall:'medium', mazeShow:true, mazeSlow:false };
+  t('mode "maze" and valid maze settings survive', JSON.stringify(gs(goodMaze)) === JSON.stringify(goodMaze));
+  [['mazeN', 5], ['mazeN', '3'], ['mazeN', 0], ['mazeN', 12], ['mazeTrail', 'red'], ['mazeTrail', 'toString'],
+   ['mazeWall', 'dark'], ['mazeWall', null], ['mazeShow', 1], ['mazeShow', 'yes'], ['mazeSlow', 0]
+  ].forEach(([k, v]) => t('  ' + k + ' = ' + JSON.stringify(v) + ' is refused', !(k in gs({ [k]: v }))));
+  t('#maze sets the mode and nothing else',
+    /if \(location\.hash === '#maze'\)\{ state\.mode = 'maze'; return true; \}/.test(src));
+}
+
 suite('reference model', reference());
 suite('eye-trainer.html', modelFrom('eye-trainer.html'));
 suite('puzzle.html', modelFrom('puzzle.html'));
@@ -265,6 +468,8 @@ meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 toneArtSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 guardSuite('puzzle.html', guardsFrom('puzzle.html'), modelFrom('puzzle.html'));
+mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalk']),
+          guardsFrom('puzzle.html'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

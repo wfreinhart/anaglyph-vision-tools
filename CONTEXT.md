@@ -1,13 +1,24 @@
 # CONTEXT — eyetrainer pair
 
-**Current task:** Pop! demo + touch fixes + mechanism write-up are done locally; waiting for Wes's playtest with Leo before the next round.
+## Current Task
+Maze mode in puzzle.html (relayed task 2026-10-22, spec docs/maze.md) — built, tested on the Air, committed; waiting on Wes's iPad check and his answer on what "colors" means.
 
-**Key decisions**
-- Pop! (one monocular bubble at a time, Mushroom Kingdom pack) is reached via `puzzle.html#pop`; the default mode is unchanged. Pop! logs to its own `anaglyph.pop.v1`, which is performance by eye, not a suppression test.
-- Touch fixes are on evidence: F3 (resize mid-drag killed all drags) reproduced and fixed; F4 lifecycle backstops added and counted in `window.dragAborts`. See docs/ui-failures.md.
-- Tests run only on the Air: `ssh air`, tar the tree into /tmp/eyetrainer-test, WebKit via NODE_PATH=/Users/wfr/Code/opr-iphone-shell/node_modules, Chromium CDP touch via /Users/wfr/Code/susmat-site/node_modules. Scripts live in the session scratchpad and are copied to the Air.
+## Key Decisions
+(full record in INTENT.md)
+- Everything in a maze (walls, mover, goal, trail, solution) is in the round's eye via `mazeInks(eye)` (inkFor/rampInk only). "Colors" = same-eye looks (trail line/light/dots, wall full/medium) — my interpretation, unconfirmed with Wes. Other-eye trail not built (doesn't force fusion).
+- Maze wins tick the HUD tally but are counted apart from right/wrong (`state.mazeWins`) and are not written to the per-eye ms log (support). Per-eye maze log = backlog.
+- Earlier character-art decisions: see INTENT.md / git log (toned .t1/.t2 art, packs, `#pop`).
 
-**Next steps**
-- Wes: playtest Pop!, cover-one-eye check, and whether drags used to die after rotation. Demo is at https://giraffes-mac-mini.tail3a44c1.ts.net/puzzle.html#pop (127.0.0.1:8000 python server behind tailscale serve; stop it when the pair ends).
-- H3 and H4 in docs/ui-failures.md still need reproducing (H4 needs iPad evidence).
-- Doctor questions are listed in docs/training-mechanism.md; nothing clinical changes without answers.
+**State:** maze committed. Uncommitted: puzzle.html jigsaw `.cellrim` full-ink slot outline (from 2026-10-14) — passes optics_test/verify on the Air but no browser check yet; kept out of the maze commit on purpose.
+**Tests (Air only):** rsync puzzle.html eye-trainer.html optics_test.js verify.py index.html webkit_smoke.js maze_realdrag.js to air:tmp/rgtest; `node optics_test.js`, `python3 verify.py`, `node webkit_smoke.js`, `node maze_realdrag.js`. Playwright 1.61.0 installed in ~/tmp/rgtest on the Air (matches cached webkit-2311). 2026-10-22: 179/0, PASS, 120/0, real-input drags OK — all emulated.
+
+**Open threads**
+- Wes: what "different colors" means (same-eye looks vs other-eye trail); iPad calibration + cover-one-eye on the maze; whether Leo knows which character to drag on a 3×3 (same-eye start cue ready if he stalls); 8×8 and medium-wall visibility.
+- Older card c-1fce19 (Pop "doesn't use both eyes", 30% tone visibility, custom packs) still unanswered.
+- Backlog: per-eye maze log; stats line says "No taps yet today" if only mazes were played.
+
+## Next Steps
+- Hand the maze to Wes; act on his iPad check and colour answer.
+- Browser-check and commit (or drop) the jigsaw `.cellrim` change.
+
+Last saved: 2026-10-22.
