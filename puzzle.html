@@ -2214,12 +2214,16 @@
   }
 
   /* ---------- maze ----------
-     He drags the mover along the corridors to the goal. Everything drawn —
-     walls, trail, the way, mover, goal — is the round's one eye, on the
+     Two characters sit in opposite corners and he drags either one along
+     the corridors; each leaves its own trail. The maze is done when the
+     trails join. Everything drawn — walls, both trails, the way, both
+     characters — is the round's one eye, on the
      field-to-ink ramp via mazeInks() and nothing else: no mask, halo,
      frame, opacity or shadow, so no position cue can reach the other eye.
      "Colours" are looks of the same ink (a tone, a line style), never a
-     second ink. The reward after the goal is the only binocular paint.
+     second ink. Nothing tells the two characters apart, so there is no
+     goal to find and no piece that isn't draggable. The reward after the
+     join is the only binocular paint.
 
      The generator and the walker below touch neither the DOM nor `state`,
      so optics_test.js can lift them and prove them over many seeds. */
@@ -2281,8 +2285,11 @@
      order and can never skip one. The head only ever moves to a cell next to
      it through an open passage; a step into a walled-off neighbour stops the
      walk there. A step back onto the cell before the head retracts the
-     trail. Mutates `trail` (cell indices, head last). */
-  function mazeWalk(maze, trail, from, to, cs){
+     trail. `other` is the other character's trail: stepping onto any of its
+     cells (its head included) is the joining move, which is added to `trail`
+     and ends the walk with joined:true. Mutates `trail` (cell indices, head
+     last). */
+  function mazeWalk(maze, trail, from, to, cs, other){
     const n = maze.n, steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / (cs / 4)));
     let moved = 0;
     for (let i = 1; i <= steps; i++){
@@ -2297,8 +2304,17 @@
       const cell = r * n + c;
       if (trail.length > 1 && trail[trail.length - 2] === cell) trail.pop(); else trail.push(cell);
       moved++;
+      if (other && other.indexOf(cell) >= 0) return { moved:moved, blocked:false, joined:true };
     }
-    return { moved:moved, blocked:false };
+    return { moved:moved, blocked:false, joined:false };
+  }
+
+  /* The maze is solved when the two trails share a cell: one head stepped
+     into the other's trail (mazeWalk adds that cell to the walker's trail).
+     The passages between their cells were already checked by mazeWalk. */
+  function mazeJoined(maze, a, b){
+    for (let i = 0; i < a.length; i++) if (b.indexOf(a[i]) >= 0) return true;
+    return false;
   }
 
   /* Every colour the maze draws, from the ramp and nowhere else. The tones
@@ -2310,8 +2326,7 @@
       wall:     state.mazeWall === 'medium' ? rampInk(eye, 0.6) : full,
       trail:    state.mazeTrail === 'light' ? rampInk(eye, 0.6) : full,
       solution: rampInk(eye, 0.45),
-      mover:    full,
-      goal:     full
+      piece:    full
     };
   }
 
@@ -2322,7 +2337,9 @@
     const maze = makeMaze(state.mazeN, (Math.random() * 4294967296) >>> 0);
     const art = pickShapes(2, null).shapes;
     state.goal = art[1];
-    mz = { maze:maze, trail:[maze.start], mover:art[0], goalShape:art[1], done:false,
+    /* Character 0 starts at maze.start, character 1 at maze.goal; each
+       trail begins at its own corner. */
+    mz = { maze:maze, trails:[[maze.start], [maze.goal]], shapes:art, done:false,
            solution:mazeSolve(maze), svg:null, cs:0, pad:0, ox:0, oy:0 };
     mazeDraw(true);
   }
@@ -2389,14 +2406,16 @@
     }
 
     const tw = Math.max(4, Math.round(cs * 0.2));
-    mz.trailPath = stroke('mztrail', ink.trail, tw, state.mazeTrail === 'dots'
+    mz.trailPaths = [0, 1].map(() => stroke('mztrail', ink.trail, tw, state.mazeTrail === 'dots'
       ? { 'stroke-linecap':'round', 'stroke-linejoin':'round', 'stroke-dasharray':'0 ' + Math.round(tw * 1.7) }
-      : { 'stroke-linecap':'round', 'stroke-linejoin':'round' });
+      : { 'stroke-linecap':'round', 'stroke-linejoin':'round' }));
 
     const ps = Math.round(cs * 0.62);
     mz.ps = ps;
-    mz.goalEl = makeThing(mz.goalShape, ink.goal, 'mzpiece mzgoal', mazeCenter(m.goal), ps);
-    mz.moverEl = makeThing(mz.mover, ink.mover, 'mzpiece mzmover', mazeCenter(mz.trail[mz.trail.length - 1]), ps);
+    mz.els = [0, 1].map(k => {
+      const tr = mz.trails[k];
+      return makeThing(mz.shapes[k], ink.piece, 'mzpiece mzchar', mazeCenter(tr[tr.length - 1]), ps);
+    });
     svg.dataset.n = String(n);
     svg.dataset.cs = String(cs);
     svg.dataset.open = m.open.join(',');
@@ -2418,13 +2437,16 @@
     return cells.map((i, k) => (k ? 'L' : 'M') + ((i % n + 0.5) * mz.cs) + ' ' + ((Math.floor(i / n) + 0.5) * mz.cs)).join('');
   }
 
-  /* The mover always sits on the trail head. */
+  /* Each character always sits on its trail head. */
   function mazeSync(){
-    const head = mz.trail[mz.trail.length - 1], at = mazeCenter(head);
-    mz.trailPath.setAttribute('d', mz.trail.length > 1 ? mazePathD(mz.trail) : '');
-    mz.moverEl.style.left = (at.x - mz.ps / 2) + 'px';
-    mz.moverEl.style.top  = (at.y - mz.ps / 2) + 'px';
-    mz.svg.dataset.trail = mz.trail.join(',');
+    mz.trails.forEach((tr, k) => {
+      const at = mazeCenter(tr[tr.length - 1]);
+      mz.trailPaths[k].setAttribute('d', tr.length > 1 ? mazePathD(tr) : '');
+      mz.els[k].style.left = (at.x - mz.ps / 2) + 'px';
+      mz.els[k].style.top  = (at.y - mz.ps / 2) + 'px';
+    });
+    mz.svg.dataset.trailA = mz.trails[0].join(',');
+    mz.svg.dataset.trailB = mz.trails[1].join(',');
   }
 
   function mazeLocal(e){
@@ -2432,16 +2454,22 @@
     return { x: e.clientX - r.left - mz.pad, y: e.clientY - r.top - mz.pad };
   }
 
-  /* Grab the mover from a generous radius round it: a three year old's
-     fingertip is a poor pointer. Same single-owner `drag` as every other
-     mode, so abortDrag and the stray-release backstops cover it. */
+  /* Grab either character from a generous radius round its trail head: a
+     three year old's fingertip is a poor pointer. The nearer head wins if
+     both are in range. Same single-owner `drag` as every other mode, so
+     abortDrag and the stray-release backstops cover it. */
   function onMazeDown(e){
     audio();
     if (!mz || mz.done || drag) return;
-    const p = mazeLocal(e), head = mz.trail[mz.trail.length - 1], c = mazeCenter(head);
-    const at = { x: c.x - mz.ox, y: c.y - mz.oy };
-    if (Math.hypot(p.x - at.x, p.y - at.y) > mz.cs * 0.8) return;
-    drag = { el:mz.svg, id:e.pointerId, maze:true, last:p };
+    const p = mazeLocal(e);
+    let which = -1, best = mz.cs * 0.8;
+    mz.trails.forEach((tr, k) => {
+      const c = mazeCenter(tr[tr.length - 1]);
+      const dist = Math.hypot(p.x - (c.x - mz.ox), p.y - (c.y - mz.oy));
+      if (dist <= best){ best = dist; which = k; }
+    });
+    if (which < 0) return;
+    drag = { el:mz.svg, id:e.pointerId, maze:true, which:which, last:p };
     try{ mz.svg.setPointerCapture(e.pointerId); }catch(_){}
     mz.svg.addEventListener('pointermove', onDrag);
     mz.svg.addEventListener('pointerup', onDrop);
@@ -2451,13 +2479,14 @@
 
   function mazeMove(e){
     const p = mazeLocal(e);
-    const r = mazeWalk(mz.maze, mz.trail, drag.last, p, mz.cs);
+    const k = drag.which, mine = mz.trails[k], other = mz.trails[1 - k];
+    const r = mazeWalk(mz.maze, mine, drag.last, p, mz.cs, other);
     drag.last = p;
     if (r.moved) mazeSync();
-    if (mz.trail[mz.trail.length - 1] === mz.maze.goal) mazeWin();
+    if (r.joined || mazeJoined(mz.maze, mine, other)) mazeWin(mine[mine.length - 1]);
   }
 
-  /* Up or cancel: nothing to put back, the mover is already on the head. */
+  /* Up or cancel: nothing to put back, each character is already on its head. */
   function mazeRelease(){
     const el = drag.el;
     drag = null;
@@ -2467,7 +2496,7 @@
     el.removeEventListener('lostpointercapture', onLost);
   }
 
-  function mazeWin(){
+  function mazeWin(at){
     mz.done = true;
     if (drag) mazeRelease();
     /* The tally ticks so the pips fill, but a maze is not an answer: the
@@ -2475,7 +2504,7 @@
     state.hits += 1; state.mazeWins += 1;
     sayYes(); buzz(12);
     paintHud();
-    celebrate(mazeCenter(mz.maze.goal));
+    celebrate(mazeCenter(at));
     setTimeout(newRound, 1400);
   }
 
@@ -2536,7 +2565,7 @@
     el.removeEventListener('pointerup', onDrop);
     el.removeEventListener('pointercancel', onDrop);
     el.removeEventListener('lostpointercapture', onLost);
-    if (wasMaze) return;             // the mover already sits on the trail head
+    if (wasMaze) return;             // each character already sits on its trail head
     el.style.transform = '';
     el.classList.remove('held');
     litRegions(false, el);

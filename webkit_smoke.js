@@ -72,11 +72,11 @@ const info = page => page.evaluate(() => {
   const s = document.querySelector('svg.maze');
   if (!s) return null;
   const r = s.getBoundingClientRect(), vb = s.viewBox.baseVal;
-  const mv = document.querySelector('.mzmover'), gl = document.querySelector('.mzgoal');
+  const pieces = document.querySelectorAll('.mzchar'), mv = pieces[0], gl = pieces[1];   // A starts at `start`, B at `goal`
   const box = e => { const b = e.getBoundingClientRect(); return { x:b.left + b.width / 2, y:b.top + b.height / 2, w:b.width }; };
   return {
     n:Number(s.dataset.n), cs:Number(s.dataset.cs), open:s.dataset.open.split(',').map(Number),
-    start:Number(s.dataset.start), goal:Number(s.dataset.goal), trail:s.dataset.trail.split(',').map(Number),
+    start:Number(s.dataset.start), goal:Number(s.dataset.goal), trail:s.dataset.trailA.split(',').map(Number), trailB:s.dataset.trailB.split(',').map(Number),
     left:r.left - vb.x, top:r.top - vb.y,          // client position of the maze's own (0,0)
     mover:mv ? box(mv) : null, goalEl:gl ? box(gl) : null, moverShape:mv && mv.dataset.shape, goalShape:gl && gl.dataset.shape
   };
@@ -124,8 +124,9 @@ const move = (page, p) => fire(page, 'pointermove', p);
 const up   = (page, p) => fire(page, 'pointerup', p);
 
 /* Grab the mover and hop to each listed cell centre, one move per cell. */
-async function hop(page, I, cells, release){
-  await down(page, ctr(I, I.trail[I.trail.length - 1]));
+async function hop(page, I, cells, release, fromB){
+  const tr = fromB ? I.trailB : I.trail;
+  await down(page, ctr(I, tr[tr.length - 1]));
   for (const c of cells) await move(page, ctr(I, c));
   if (release !== false) await up(page, ctr(I, cells.length ? cells[cells.length - 1] : I.start));
 }
@@ -234,6 +235,8 @@ async function closeSheet(page){
     let I = await info(page);
     const sol = solve(I);
     await hop(page, I, sol.slice(1, Math.max(2, Math.ceil(sol.length / 2))));   // some trail on screen
+    I = await info(page);
+    await hop(page, I, [sol[sol.length - 2]], true, true);                      // and a first step from the other character
     const ink = inkOf(CAL[calName], eye);
     await audit(page, ink, calName + ' ' + eye + ' ' + look.name);
     t(calName + ' ' + eye + ' ' + look.name + ': no page errors', page.errors.length === 0, page.errors.join(' | '));
@@ -510,6 +513,120 @@ async function closeSheet(page){
     t('#maze opens Maze although Jigsaw was saved', !!I && I.n === 4);
     t('a saved eye plan is not overridden (right eye only)', (await page.evaluate(() => getComputedStyle(document.querySelector('.mzwall')).stroke)) === 'rgb(255, 0, 0)');
     t('a saved pack choice is not overridden (Animals)', ['bear', 'bunny', 'duck'].indexOf(I.moverShape) >= 0 && ['bear', 'bunny', 'duck'].indexOf(I.goalShape) >= 0, I.moverShape + ',' + I.goalShape);
+    await page.ctx.close();
+  }
+
+  /* ===== 8. either character can be dragged; the maze is solved when the trails join ===== */
+  console.log('\nthe second character');
+  const legal = (I, tr, from) => {
+    if (tr[0] !== from || new Set(tr).size !== tr.length) return false;
+    for (let k = 1; k < tr.length; k++){
+      const a = tr[k - 1], b = tr[k];
+      if (!D.some(d => (I.open[a] & d[2]) && (Math.floor(a / I.n) + d[1]) * I.n + (a % I.n) + d[0] === b)) return false;
+    }
+    return true;
+  };
+  for (const n of [3, 6]){
+    const page = await openPage(browser, { game:{ mazeN:n } });
+    let I = await info(page);
+    const sol = solve(I), rev = sol.slice().reverse();
+    t(n + 'x' + n + ': the two characters start in opposite corners, each trail at its own corner',
+      I.trail.join() === String(I.start) && I.trailB.join() === String(I.goal) &&
+      Math.hypot(I.mover.x - ctr(I, I.start).x, I.mover.y - ctr(I, I.start).y) < 1.5 &&
+      Math.hypot(I.goalEl.x - ctr(I, I.goal).x, I.goalEl.y - ctr(I, I.goal).y) < 1.5);
+    // grab the goal-corner character and walk part of the way
+    await hop(page, I, rev.slice(1, 3), true, true);
+    I = await info(page);
+    t(n + 'x' + n + ': grabbing the goal-corner character walks its own trail', I.trailB.join() === rev.slice(0, 3).join(), I.trailB.join());
+    t(n + 'x' + n + ': the other character stayed put', I.trail.join() === String(I.start));
+    const atB = ctr(I, I.trailB[I.trailB.length - 1]);
+    t(n + 'x' + n + ': it sits on its trail head', Math.hypot(I.goalEl.x - atB.x, I.goalEl.y - atB.y) < 1.5);
+    // a flick through a wall from its head does nothing
+    const head = I.trailB[I.trailB.length - 1], hc = ctr(I, head);
+    let flicked = 0, held = true;
+    for (const d of D){
+      const r = Math.floor(head / I.n) + d[1], c = head % I.n + d[0];
+      if ((I.open[head] & d[2]) || r < 0 || r >= I.n || c < 0 || c >= I.n) continue;
+      const before = I.trailB.join(), to = { x:hc.x + d[0] * I.cs * 3, y:hc.y + d[1] * I.cs * 3 };
+      await down(page, hc); await move(page, to); await up(page, to);
+      flicked++;
+      if ((await info(page)).trailB.join() !== before) held = false;
+    }
+    t(n + 'x' + n + ': a flick through a wall does not move the second trail (' + flicked + ' walls)', held && (n === 3 || flicked > 0));
+    // finish from this end: walks onto the other character at the start corner
+    I = await info(page);
+    await hop(page, I, rev.slice(3), false, true);
+    await sleep(60);
+    I = await info(page);
+    t(n + 'x' + n + ': solving from the goal end joins the trails and fires the reward',
+      I.trailB[I.trailB.length - 1] === I.start && legal(I, I.trailB, I.goal) && (await page.locator('#burst span').count()) === 16 &&
+      (await page.textContent('#hitCount')) === '1', I.trailB.join());
+    await page.ctx.close();
+  }
+  {
+    // meet in the middle: A walks the first half, B the second, then B steps onto A's head
+    const page = await openPage(browser, { game:{ mazeN:6 } });
+    let I = await info(page);
+    const sol = solve(I), m = Math.floor(sol.length / 2) - 1;
+    await hop(page, I, sol.slice(1, m + 1));
+    I = await info(page);
+    await hop(page, I, sol.slice(m + 2, sol.length - 1).reverse(), true, true);
+    I = await info(page);
+    t('two trails with one empty cell between: not solved yet', I.trailB[I.trailB.length - 1] === sol[m + 2] && (await page.locator('#burst span').count()) === 0 &&
+      (await page.textContent('#hitCount')) === '0', I.trailB.join());
+    t('both trails are legal and disjoint', legal(I, I.trail, I.start) && legal(I, I.trailB, I.goal) && !I.trail.some(c => I.trailB.indexOf(c) >= 0));
+    await audit(page, inkOf(CAL.std, 'L'), 'two trails on screen');
+    await hop(page, I, [sol[m + 1]], true, true);
+    I = await info(page);
+    t('right next to each other (head to head, no step between): still not solved', I.trailB[I.trailB.length - 1] === sol[m + 1] && (await page.textContent('#hitCount')) === '0');
+    await hop(page, I, [sol[m]], false, true);
+    await sleep(60);
+    t('stepping onto the other head solves it (tally 1, reward fired)', (await page.textContent('#hitCount')) === '1' && (await page.locator('#burst span').count()) === 16);
+    await sleep(1700);
+    const K = await info(page);
+    t('then a fresh maze with both trails reset', K.trail.length === 1 && K.trailB.length === 1 && K.trail[0] === K.start && K.trailB[0] === K.goal);
+    t('no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+  {
+    // one reaches the other's trail body (not its head): B detours into a side branch off the
+    // route, so its trail passes through route cell sol[k] while its head is elsewhere
+    const page = await openPage(browser, { game:{ mazeN:6 } });
+    let found = null, I, sol;
+    for (let tries = 0; tries < 12 && !found; tries++){
+      I = await info(page); sol = solve(I);
+      for (let k = 1; k < sol.length - 1 && !found; k++){
+        for (const d of D){
+          const to = (Math.floor(sol[k] / I.n) + d[1]) * I.n + (sol[k] % I.n) + d[0];
+          if ((I.open[sol[k]] & d[2]) && sol.indexOf(to) < 0){ found = { k:k, side:to }; break; }
+        }
+      }
+      if (!found){ await page.keyboard.press('n'); await sleep(100); }
+    }
+    t('found a maze with a side branch off the route', !!found);
+    if (found){
+      const k = found.k;
+      await hop(page, I, sol.slice(1, k), true, false);                        // A to sol[k-1]
+      I = await info(page);
+      await hop(page, I, sol.slice(k, sol.length - 1).reverse().concat([found.side]), true, true);   // B round the corner
+      I = await info(page);
+      t('B\'s head is off the route and its body passes the cell next to A',
+        I.trailB[I.trailB.length - 1] === found.side && I.trailB.indexOf(sol[k]) >= 0 && (await page.textContent('#hitCount')) === '0', I.trailB.join());
+      await hop(page, I, [sol[k]], false, false);
+      await sleep(60);
+      t('A stepping onto a cell in the middle of B\'s trail joins them',
+        (await page.textContent('#hitCount')) === '1' && (await page.locator('#burst span').count()) === 16);
+    }
+    await page.ctx.close();
+  }
+  {
+    // hit testing: nearest head wins when both are in range; empty ground grabs nothing
+    const page = await openPage(browser, { game:{ mazeN:3 } });
+    let I = await info(page);
+    const a = ctr(I, I.start), far = ctr(I, I.n + 1);
+    await down(page, far); await move(page, ctr(I, I.n + 2)); await up(page, far);
+    I = await info(page);
+    t('pressing on neither character grabs nothing', I.trail.length === 1 && I.trailB.length === 1);
     await page.ctx.close();
   }
 
