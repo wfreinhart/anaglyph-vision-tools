@@ -969,8 +969,9 @@ function mazeSuite(label, m, g){
     t('the Show the way switch is really disabled where the way is not offered', /\$\('mazeShow'\)\.disabled = !way;/.test(src));
     t('the Colours chips are really disabled under the Both plan', /b\.disabled = noOther;/.test(src));
     t('the trail is cut only in Trail in other colour', /if \(mz\.colours === 'trail'\) pts = mazeCutTrail\(/.test(code));
-    t('the maze and its split are made together once, not on every redraw',
-      /const made = mazeWithSplit\(state\.mazeN, seed\)/.test(code) && /split:made\.split/.test(code) && !/mazeSplit\(/.test(braceBlock(src, 'function mazeDraw(')));
+    t('only Split walls filters the maze through the split; it is made once, not on every redraw',
+      /const made = mazeMode\(\) === 'split' \? mazeWithSplit\(state\.mazeN, seed\)\s*: \{ maze:makeMaze\(state\.mazeN, seed\), seed:seed, split:null \}/.test(code) &&
+      /split:made\.split/.test(code) && !/mazeSplit\(|mazeWithSplit\(/.test(braceBlock(src, 'function mazeDraw(')));
   }
 }
 

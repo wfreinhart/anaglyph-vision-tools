@@ -2712,9 +2712,13 @@
 
   function buildMaze(){
     const seed = (Math.random() * 4294967296) >>> 0;
-    /* The maze is chosen together with a good split, whatever the colour
-       mode, so changing the mode mid-round never needs a new maze. */
-    const made = mazeWithSplit(state.mazeN, seed), maze = made.maze;
+    /* Only Split walls filters mazes through the split criterion; every
+       other mode gets the plain generator's maze. Changing the colour mode
+       deals a new round (group -> newRound), so the split is never needed
+       for a maze built without one. */
+    const made = mazeMode() === 'split' ? mazeWithSplit(state.mazeN, seed)
+                                        : { maze:makeMaze(state.mazeN, seed), seed:seed, split:null };
+    const maze = made.maze;
     const art = pickShapes(2, null).shapes;
     state.goal = art[1];
     /* Character 0 starts at maze.start, character 1 at maze.goal; each
@@ -3378,7 +3382,7 @@
     $('mazeColoursNote').textContent = noOther
       ? 'Not available while "Which eye works" is Both: there is no other eye. Play is one colour.'
       : ({ one:'',
-           trail:'Experimental. Both trails go to the other eye, stopping a cell short of each character; walls, characters and the way stay in this round\'s eye.',
+           trail:'Experimental. Both trails go to the other eye, stopping a cell short of each character; walls and characters stay in this round\'s eye.',
            split:'Experimental. Each wall piece goes to one eye or the other, so the maze needs what both eyes see. Characters and trails stay in this round\'s eye.',
            chars:'Experimental. Walls stay in this round\'s eye; both characters and both trails go to the other eye.' })[state.mazeColours];
     $('mazeColoursNote').classList.toggle('hide', !$('mazeColoursNote').textContent);
@@ -3386,7 +3390,9 @@
     $('mazeShowRow').classList.toggle('off', !way);
     $('mazeShowSub').textContent = way
       ? 'Draws the path through the maze, in the same eye. Turn off for a plain maze.'
-      : 'Not available in this colour mode: it would show one eye the route.';
+      : (mazeMode() === 'trail'
+          ? 'Not available in this colour mode: the other-eye trail would cut gaps in the line that show this eye where the trail went.'
+          : 'Not available in this colour mode: it would show one eye the route.');
     $('mazeSlowRow').classList.toggle('off', !state.mazeShow || !way);
     /* Packs and shape set only matter where a round draws built-in shapes:
        not Blocks (tetrominoes), not a Jigsaw showing a photo or scene. */
