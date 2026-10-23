@@ -42,35 +42,67 @@ vs draggable". This replaces the first spec's fixed mover and goal.
   exactly n²−1 passages, unique solution. The characters start in opposite corners (`maze.start` and
   `maze.goal`, still the ends of the solution path, which "Show the way" and "Draw it slowly" draw
   unchanged).
-- Grab: pressing within 0.8 cell of either character's trail head takes that one (the nearer head if both
-  are in range); the other stays put. Anywhere else grabs nothing.
-- Each drag walks its own trail. It snaps cell to cell. Pointer moves are sampled along the segment from the
-  last point at ≤ ¼-cell steps, so a fast drag walks each open passage in order and stops at a wall; it
-  never jumps. Moving back onto the previous cell of its own trail retracts it.
-- Meeting: the maze is solved only when the two characters meet, i.e. a head steps onto the OTHER character's
-  HEAD cell. A trail may walk over the other trail's body (trails may overlap; walls, retraction and the
-  ¼-cell sampling are unchanged), and that does not solve it. `mazeWalk(..., other)` reports `joined` when the
-  walk (a step forward or a retraction) leaves the heads on one cell and ends there; `mazeJoined(maze, a, b)` is
-  the DOM-free test (last cell of each trail equal). The reward fires at the meeting cell. Each trail retracts
-  only along its own cells, so an overlap never disturbs the other trail.
-- Release: `pointerup` first walks the final pointer position exactly like a move (a finger whose release lands
-  on the meeting cell finishes the maze), then releases if that did not already win. `pointercancel` and
-  `lostpointercapture` (and the stray-release backstops) never walk or score; they just release.
+- Movement is CONTINUOUS (Wes, 2026-10-23: "make the movement in the maze continuous instead of
+  discrete"; supersedes the old cell-to-cell snapping). Design: rails. A character (a "walker") is
+  `{ trail, nx, f }`: `trail` the cells it has fully passed (head last), `nx` the neighbour its tip is
+  sliding toward (-1 at rest) and `f` 0..1 how far along head→nx. It only ever sits on an open edge
+  between two cell centres, so it slides along the corridor centre lines and cannot leave them. Its
+  drawn trail is the polyline through the passed cell centres plus the part-way tip; it grows and retracts
+  smoothly (going back over the cell before the head pops it and leaves the tip on that edge). Positions
+  are stored in cell units (cells + fraction), so a resize or rotation keeps them.
+- Following the finger is LOCAL (`mazePursue`). Each pointer sample is cut into ≤ ¼-cell sub-samples
+  (`MAZE.sub`), so a fast flick is followed as closely as a slow drag. For each sub-sample only the open arms
+  of the cell the character is nearest to are considered (an arm runs from that cell's centre to the
+  neighbour's centre); the character slides, at most `MAZE.step` (½ cell) per sub-sample, toward the point of
+  the best-fitting arm (the nearest point on an arm to the finger). It never snaps to the globally nearest
+  segment, so a finger in the parallel corridor beyond a wall cannot carry it across.
+  Turn choice at a junction is that same rule: the arm with the smallest distance to the finger wins, with
+  two head starts so a sloppy fingertip does not wander into side passages: the arm the character is already
+  on gets `MAZE.hold` (0.12 cell) and the straight way on gets `MAZE.ahead` (0.2 cell). A finger past a dead
+  end or a wall leaves the character at the nearest rail point. A press keeps its offset from the character
+  (no jump on pick-up). On release the character settles on the final finger point (`settle`); otherwise a
+  finger that lands far from it is caught up with gradually (≤ ½ cell per sub-sample).
+- Grab: pressing within 0.8 cell (`MAZE.grab`) of either character takes that one (the nearer if both are in
+  range); the other stays put. Anywhere else grabs nothing.
+- Meeting: the maze is solved when the two characters meet, i.e. the distance ALONG THE CORRIDORS between
+  them (`mazeGap`, a graph distance in cells, not screen distance) is ≤ `MAZE.meet` (0.5 cell). So it can
+  never fire across a wall (characters either side of a wall are at least 3 cells apart, the way round).
+  A character on or crossing the other's trail body has not met it; only the characters count, and
+  retracting toward the other can meet too. The slide stops at the sub-sample where the gap reaches the
+  threshold; the reward fires between the two characters, which then overlap slightly (the pieces are 0.62
+  cell wide).
+- Release: `pointerup` first slides to the final pointer position exactly like a move (a finger whose
+  release lands on the meeting wins), with settling, then releases if that did not already win.
+  `pointercancel` and `lostpointercapture` (and the stray-release backstops) never move or score; they
+  just release.
 - pointercancel, release, resize, orientation change and mode change leave the maze recoverable (both
-  trails kept, each character on its head, ready to be grabbed again; reuse the existing drag lifecycle /
-  abortDrag). The svg carries `data-trail-a` (from `data-start`) and `data-trail-b` (from `data-goal`) so
+  walkers kept, ready to be grabbed again; reuse the existing drag lifecycle / abortDrag). The svg carries
+  `data-trail-a` / `data-trail-b` (the passed cells) and `data-pos-a` / `data-pos-b` (`head,next,fraction`) so
   tests can read both.
+- Optics/paint margin: the piece is 0.62 cell (never more than 0.8 cell minus the wall width, for tiny
+  cells), so centred on a corridor it clears the painted wall edge by about 0.14 cell. Checked in WebKit at
+  8×8 on 1024×768 and 768×1024: the character's bounding box never overlaps a wall rectangle at any sampled
+  position.
+- The pure functions (`mazeWalker`, `mazePoint`, `mazePursue`, `mazeSlide`, `mazeGap`, `mazeJoined`, and the
+  `MAZE` tuning constants) touch no DOM and no state, so optics_test.js lifts them (`braceBlock`) and proves
+  them. They replace the old `mazeWalk`.
 
 ## Done means
 1. `node optics_test.js` passes with a new maze suite: generator (perfect, connected, unique
-   solution, many seeds and all sizes), traversal (fast drag never crosses a wall; backtrack retracts),
-   meeting (heads meet in the middle, one reaches the other's head, walking over the other's body does not
-   solve it, overlapping trails retract correctly, never through a wall, retraction undoes progress), and inks (every `mazeInks` colour equals `rampInk`/`inkFor` for the round's eye and keeps the ink's
-   ghost ratio). No existing test weakened; measured values unchanged.
+   solution, many seeds and all sizes), rails (every intermediate position on an open edge and joined to the
+   last; hostile fingers, flicks through walls, a finger running across a wall into a parallel corridor,
+   wobbly and straight following, smooth growth and retraction, gradual catch-up and settling), gap and meeting
+   (graph distance, side-by-side across a wall is the way round, meets exactly at 0.5 cell, standing on the
+   other's trail does not meet, never through a wall), and inks (every `mazeInks` colour equals
+   `rampInk`/`inkFor` for the round's eye and keeps the ink's ghost ratio). No existing test weakened;
+   measured values unchanged.
 2. `python3 verify.py` PASS with the new ids registered.
 3. Playwright WebKit with touch on the Air (labelled "emulated"): every stroke/fill rendered inside
-   the field is on the round eye's ramp; a fast swipe does not cross walls; backtracking; solution
-   toggle and animation; completion fires the reward; pointercancel/resize recover.
+   the field is on the round eye's ramp, including at sampled positions mid-drag; a fast swipe does not cross
+   walls; sampled positions during smooth drags from both characters at 8×8 on both orientations are on open
+   edges, drawn where the model says and never over a wall; backtracking; solution toggle and animation;
+   completion fires the reward; pointercancel/resize recover. maze_realdrag.js drives hit-tested mouse drags
+   from both characters on smooth wobbling paths.
 4. Acceptance (Wes, real iPad): calibration + cover-one-eye check on the maze; a 3×3 round Leo
    traces without coaching, and drags either character without asking which one moves.
 

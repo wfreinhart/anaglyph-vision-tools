@@ -2225,8 +2225,25 @@
      goal to find and no piece that isn't draggable. The reward after the
      join is the only binocular paint.
 
-     The generator and the walker below touch neither the DOM nor `state`,
-     so optics_test.js can lift them and prove them over many seeds. */
+     Movement is continuous, on rails: a character sits on an open edge
+     between two cell centres and slides along the corridor centre lines,
+     following the finger. Its trail is the polyline through the cell
+     centres it has passed plus the part-way tip, so it grows and retracts
+     smoothly.
+
+     The generator and the rail walker below touch neither the DOM nor
+     `state`, so optics_test.js can lift them and prove them over many
+     seeds. */
+
+  /* The tuning, in cells. meet: the two characters have met when the way
+     between them along the corridors is this short (never screen
+     distance, so a wall is never crossed). step: furthest a character
+     slides per finger sample. sub: finger samples are cut to this length.
+     grab: how close a press must be to take a character. hold: how much
+     better another arm must fit the finger before the character leaves the
+     arm it is on. ahead: head start given to carrying straight on at a
+     junction, so a wobbly finger doesn't wander into side passages. */
+  const MAZE = { meet:0.5, step:0.5, sub:0.25, grab:0.8, hold:0.12, ahead:0.2 };
   function mazeRng(seed){
     let a = seed >>> 0;
     return function(){
@@ -2279,40 +2296,160 @@
     return path;
   }
 
-  /* Walks the trail along the straight line from one pointer point to the
-     next (maze pixels, origin at the top-left corner, cell side cs) in steps
-     of at most a quarter cell, so a fast flick passes through each cell in
-     order and can never skip one. The head only ever moves to a cell next to
-     it through an open passage; a step into a walled-off neighbour stops the
-     walk there. A step back onto the cell before the head retracts the
-     trail. `other` is the other character's trail. Its body is walkable (the
-     trails may overlap); only the meeting counts: the head reaching the
-     other's HEAD cell ends the walk with joined:true. Mutates `trail` (cell
-     indices, head last). */
-  function mazeWalk(maze, trail, from, to, cs, other){
-    const n = maze.n, steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / (cs / 4)));
-    let moved = 0;
-    for (let i = 1; i <= steps; i++){
-      const x = from.x + (to.x - from.x) * i / steps, y = from.y + (to.y - from.y) * i / steps;
-      const c = Math.floor(x / cs), r = Math.floor(y / cs);
-      if (c < 0 || c >= n || r < 0 || r >= n) continue;
-      const head = trail[trail.length - 1], dc = c - head % n, dr = r - Math.floor(head / n);
-      /* The head's own cell, a corner, or off the grid: nothing to do. */
-      if (Math.abs(dc) + Math.abs(dr) !== 1) continue;
-      const bit = dr < 0 ? 1 : (dc > 0 ? 2 : (dr > 0 ? 4 : 8));
-      if (!(maze.open[head] & bit)) return { moved:moved, blocked:true };
-      const cell = r * n + c;
-      if (trail.length > 1 && trail[trail.length - 2] === cell) trail.pop(); else trail.push(cell);
-      moved++;
-      if (other && other.length && other[other.length - 1] === cell) return { moved:moved, blocked:false, joined:true };
-    }
-    return { moved:moved, blocked:false, joined:false };
+  /* A walker is one character on the rails: trail is the cells it has fully
+     passed (head last); nx is the cell its tip is sliding toward (-1 when
+     it rests on the head cell) and f how far along head -> nx it is, 0..1.
+     A perfect maze makes the trail the one route from its start to the tip. */
+  function mazeWalker(cell){
+    return { trail:[cell], nx:-1, f:0 };
   }
 
-  /* The maze is solved when the two characters meet: both heads on the same
-     cell. Overlapping bodies do not count. */
+  /* Where the tip is, in cell units (cell i has its centre at c+0.5, r+0.5). */
+  function mazePoint(maze, w){
+    const n = maze.n, h = w.trail[w.trail.length - 1];
+    let x = h % n + 0.5, y = Math.floor(h / n) + 0.5;
+    if (w.nx >= 0){
+      x += (w.nx % n + 0.5 - x) * w.f;
+      y += (Math.floor(w.nx / n) + 0.5 - y) * w.f;
+    }
+    return { x:x, y:y };
+  }
+
+  /* Moves f toward ft by at most `budget`. Reaching an end of the edge
+     completes the cell (forward) or drops the edge (back). Returns the
+     distance moved. */
+  function mazeFollow(w, ft, budget){
+    const delta = Math.max(-budget, Math.min(budget, ft - w.f));
+    w.f += delta;
+    if (w.f >= 1 - 1e-9){ w.trail.push(w.nx); w.nx = -1; w.f = 0; }
+    else if (w.f <= 1e-9){ w.nx = -1; w.f = 0; }
+    return Math.abs(delta);
+  }
+
+  /* From rest on the head cell, slide d along the passage toward cell k.
+     Going back onto the cell before the head takes the head off the trail
+     and leaves the tip on that edge, so retracting is as smooth as growing. */
+  function mazeLeave(w, k, d){
+    const len = w.trail.length, prev = len > 1 ? w.trail[len - 2] : -1, whole = d >= 1 - 1e-9;
+    if (k === prev){
+      const gone = w.trail.pop();
+      if (whole){ w.nx = -1; w.f = 0; } else { w.nx = gone; w.f = 1 - d; }
+    } else if (whole){
+      w.trail.push(k); w.nx = -1; w.f = 0;
+    } else { w.nx = k; w.f = d; }
+    return d;
+  }
+
+  /* Takes the walker toward the point t along the arm from cell C to cell
+     k (k = -1: to the centre of C), going through C if it is not on that
+     arm already, by at most `budget`. Only ever moves along passages. */
+  function mazeGo(w, C, k, t, budget){
+    let left = budget;
+    if (w.nx >= 0){
+      const head = w.trail[w.trail.length - 1], far = C === head ? w.nx : head;
+      if (k === far){
+        left -= mazeFollow(w, C === head ? t : 1 - t, left);
+        return budget - left;
+      }
+      left -= mazeFollow(w, C === head ? 0 : 1, left);
+      if (w.nx >= 0) return budget - left;
+    }
+    if (k >= 0 && t > 0 && left > 0) left -= mazeLeave(w, k, Math.min(t, left));
+    return budget - left;
+  }
+
+  /* One pursuit step toward the finger at (fx, fy), in cell units. Only the
+     open arms of the cell the character is nearest to are considered (each
+     arm runs from its centre to the next cell's centre), so the character
+     can never be pulled across a wall into the next corridor along. It goes
+     to the point of the best-fitting arm; the arm it is already on and the
+     straight way on are favoured, so a sloppy finger does not flick it
+     into side passages. Returns how far it slid. */
+  function mazePursue(maze, w, fx, fy){
+    const n = maze.n, tr = w.trail, len = tr.length, head = tr[len - 1];
+    const C = w.nx >= 0 && w.f >= 0.5 ? w.nx : head;
+    const far = w.nx >= 0 ? (C === head ? w.nx : head) : -1;
+    const prev = C === head ? (len > 1 ? tr[len - 2] : -1) : head;
+    const vx = fx - (C % n + 0.5), vy = fy - (Math.floor(C / n) + 0.5);
+    let bestK = -1, bestT = 0, bestD = Infinity;
+    [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]].forEach(d => {
+      if (!(maze.open[C] & d[2])) return;
+      const k = C + d[0] + d[1] * n;
+      if (k !== far && k !== prev && tr.indexOf(k) >= 0) return;
+      const t = Math.max(0, Math.min(1, vx * d[0] + vy * d[1]));
+      let fit = Math.hypot(vx - t * d[0], vy - t * d[1]);
+      if (k === far) fit -= MAZE.hold;
+      if (prev >= 0 && k - C === C - prev) fit -= MAZE.ahead;
+      if (fit < bestD){ bestD = fit; bestK = k; bestT = t; }
+    });
+    if (bestT < 0.01){ bestK = -1; bestT = 0; }
+    return mazeGo(w, C, bestK, bestT, MAZE.step);
+  }
+
+  /* Steps along the passages from one cell to every other cell (-1: not
+     reachable). */
+  function mazeDist(maze, from){
+    const n = maze.n, dist = new Array(n * n).fill(-1), q = [from];
+    dist[from] = 0;
+    for (let k = 0; k < q.length; k++){
+      const at = q[k];
+      [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]].forEach(d => {
+        const to = at + d[0] + d[1] * n;
+        if ((maze.open[at] & d[2]) && dist[to] < 0){ dist[to] = dist[at] + 1; q.push(to); }
+      });
+    }
+    return dist;
+  }
+
+  /* How far apart two walkers are ALONG THE CORRIDORS, in cells. Never the
+     straight-line distance, so characters either side of a wall are as far
+     apart as the way round. */
+  function mazeGap(maze, a, b){
+    const ha = a.trail[a.trail.length - 1], hb = b.trail[b.trail.length - 1];
+    const ea = a.nx < 0 ? [[ha, 0]] : [[ha, a.f], [a.nx, 1 - a.f]];
+    const eb = b.nx < 0 ? [[hb, 0]] : [[hb, b.f], [b.nx, 1 - b.f]];
+    let best = Infinity;
+    if (a.nx >= 0 && b.nx >= 0){
+      if (ha === hb && a.nx === b.nx) best = Math.abs(a.f - b.f);
+      else if (ha === b.nx && a.nx === hb) best = Math.abs(a.f - (1 - b.f));
+    }
+    ea.forEach(p => {
+      const dist = mazeDist(maze, p[0]);
+      eb.forEach(q => { if (dist[q[0]] >= 0) best = Math.min(best, p[1] + q[1] + dist[q[0]]); });
+    });
+    return best;
+  }
+
+  /* The maze is solved when the two characters meet: the way between them
+     is MAZE.meet or less. One crossing the other's trail does not count;
+     only the characters themselves do. */
   function mazeJoined(maze, a, b){
-    return a.length > 0 && b.length > 0 && a[a.length - 1] === b[b.length - 1];
+    return mazeGap(maze, a, b) <= MAZE.meet + 1e-9;
+  }
+
+  /* Slides the walker along the finger's straight line from one point to
+     the next (maze pixels, origin at the top-left corner, cell side cs). The
+     line is cut into samples of at most MAZE.sub cells, so a fast flick is
+     followed as closely as a slow drag. Each sample slides it at most
+     MAZE.step, so if the finger jumps to somewhere the rails reach only the
+     long way round the character glides there over the next samples rather
+     than appearing there; `settle` (the finger's final point, on release)
+     also lets it finish arriving. `other` is the other character's walker:
+     the slide stops the moment they meet (joined:true). onStep(w), if given,
+     sees the walker after each slide. Mutates w. */
+  function mazeSlide(maze, w, from, to, cs, other, onStep, settle){
+    const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / cs / MAZE.sub));
+    let moved = false;
+    for (let i = 1; i <= steps + (settle ? 8 : 0); i++){
+      const k = Math.min(i, steps);
+      const used = mazePursue(maze, w, (from.x + (to.x - from.x) * k / steps) / cs, (from.y + (to.y - from.y) * k / steps) / cs);
+      if (used > 0){
+        moved = true;
+        if (onStep) onStep(w);
+        if (other && mazeJoined(maze, w, other)) return { moved:true, joined:true };
+      } else if (i > steps) break;
+    }
+    return { moved:moved, joined:false };
   }
 
   /* Every colour the maze draws, from the ramp and nowhere else. The tones
@@ -2336,8 +2473,8 @@
     const art = pickShapes(2, null).shapes;
     state.goal = art[1];
     /* Character 0 starts at maze.start, character 1 at maze.goal; each
-       trail begins at its own corner. */
-    mz = { maze:maze, trails:[[maze.start], [maze.goal]], shapes:art, done:false,
+       walker (and its trail) begins at its own corner. */
+    mz = { maze:maze, walkers:[mazeWalker(maze.start), mazeWalker(maze.goal)], shapes:art, done:false,
            solution:mazeSolve(maze), svg:null, cs:0, pad:0, ox:0, oy:0 };
     mazeDraw(true);
   }
@@ -2408,12 +2545,12 @@
       ? { 'stroke-linecap':'round', 'stroke-linejoin':'round', 'stroke-dasharray':'0 ' + Math.round(tw * 1.7) }
       : { 'stroke-linecap':'round', 'stroke-linejoin':'round' }));
 
-    const ps = Math.round(cs * 0.62);
+    /* The piece is a little under two thirds of a cell, and never so big
+       that, centred on a corridor, it comes within a tenth of a cell of a
+       wall's painted edge (the walls have a minimum width at small cells). */
+    const ps = Math.max(6, Math.min(Math.round(cs * 0.62), Math.floor(cs * 0.8 - ww)));
     mz.ps = ps;
-    mz.els = [0, 1].map(k => {
-      const tr = mz.trails[k];
-      return makeThing(mz.shapes[k], ink.piece, 'mzpiece mzchar', mazeCenter(tr[tr.length - 1]), ps);
-    });
+    mz.els = [0, 1].map(k => makeThing(mz.shapes[k], ink.piece, 'mzpiece mzchar', mazeAt(k), ps));
     svg.dataset.n = String(n);
     svg.dataset.cs = String(cs);
     svg.dataset.open = m.open.join(',');
@@ -2423,28 +2560,36 @@
     mazeSync();
   }
 
-  /* Cell centre in field pixels. */
-  function mazeCenter(i){
-    const n = mz.maze.n, c = i % n, r = (i - c) / n;
-    return { x: mz.ox + (c + 0.5) * mz.cs, y: mz.oy + (r + 0.5) * mz.cs };
+  /* Where character k is, in field pixels. */
+  function mazeAt(k){
+    const p = mazePoint(mz.maze, mz.walkers[k]);
+    return { x: mz.ox + p.x * mz.cs, y: mz.oy + p.y * mz.cs };
   }
 
-  /* A polyline through cell centres, in maze pixels. */
-  function mazePathD(cells){
-    const n = mz.maze.n;
-    return cells.map((i, k) => (k ? 'L' : 'M') + ((i % n + 0.5) * mz.cs) + ' ' + ((Math.floor(i / n) + 0.5) * mz.cs)).join('');
+  /* A polyline through the cell centres a walker has passed, then on to
+     its tip, in maze pixels. */
+  function mazePathD(cells, tip){
+    const n = mz.maze.n, cs = mz.cs;
+    const pts = cells.map(i => ({ x:(i % n + 0.5) * cs, y:(Math.floor(i / n) + 0.5) * cs }));
+    if (tip) pts.push(tip);
+    return pts.map((q, k) => (k ? 'L' : 'M') + q.x + ' ' + q.y).join('');
   }
 
-  /* Each character always sits on its trail head. */
+  /* Each character always sits on its trail's tip. */
   function mazeSync(){
-    mz.trails.forEach((tr, k) => {
-      const at = mazeCenter(tr[tr.length - 1]);
-      mz.trailPaths[k].setAttribute('d', tr.length > 1 ? mazePathD(tr) : '');
+    mz.walkers.forEach((w, k) => {
+      const at = mazeAt(k), tip = mazePoint(mz.maze, w);
+      mz.trailPaths[k].setAttribute('d', w.trail.length > 1 || w.nx >= 0
+        ? mazePathD(w.trail, { x:tip.x * mz.cs, y:tip.y * mz.cs }) : '');
       mz.els[k].style.left = (at.x - mz.ps / 2) + 'px';
       mz.els[k].style.top  = (at.y - mz.ps / 2) + 'px';
     });
-    mz.svg.dataset.trailA = mz.trails[0].join(',');
-    mz.svg.dataset.trailB = mz.trails[1].join(',');
+    /* For the tests: the cells passed, and "head,next,fraction". */
+    const pos = w => w.trail[w.trail.length - 1] + ',' + w.nx + ',' + w.f.toFixed(4);
+    mz.svg.dataset.trailA = mz.walkers[0].trail.join(',');
+    mz.svg.dataset.trailB = mz.walkers[1].trail.join(',');
+    mz.svg.dataset.posA = pos(mz.walkers[0]);
+    mz.svg.dataset.posB = pos(mz.walkers[1]);
   }
 
   function mazeLocal(e){
@@ -2452,22 +2597,22 @@
     return { x: e.clientX - r.left - mz.pad, y: e.clientY - r.top - mz.pad };
   }
 
-  /* Grab either character from a generous radius round its trail head: a
-     three year old's fingertip is a poor pointer. The nearer head wins if
-     both are in range. Same single-owner `drag` as every other mode, so
+  /* Grab either character from a generous radius round it: a three year
+     old's fingertip is a poor pointer. The nearer one wins if both are in
+     range. The press keeps its offset from the character, so it does not
+     jump to the finger. Same single-owner `drag` as every other mode, so
      abortDrag and the stray-release backstops cover it. */
   function onMazeDown(e){
     audio();
     if (!mz || mz.done || drag) return;
     const p = mazeLocal(e);
-    let which = -1, best = mz.cs * 0.8;
-    mz.trails.forEach((tr, k) => {
-      const c = mazeCenter(tr[tr.length - 1]);
-      const dist = Math.hypot(p.x - (c.x - mz.ox), p.y - (c.y - mz.oy));
-      if (dist <= best){ best = dist; which = k; }
+    let which = -1, best = mz.cs * MAZE.grab, off = null;
+    mz.walkers.forEach((w, k) => {
+      const c = mazePoint(mz.maze, w), dx = c.x * mz.cs - p.x, dy = c.y * mz.cs - p.y, dist = Math.hypot(dx, dy);
+      if (dist <= best){ best = dist; which = k; off = { x:dx, y:dy }; }
     });
     if (which < 0) return;
-    drag = { el:mz.svg, id:e.pointerId, maze:true, which:which, last:p };
+    drag = { el:mz.svg, id:e.pointerId, maze:true, which:which, off:off, last:{ x:p.x + off.x, y:p.y + off.y } };
     try{ mz.svg.setPointerCapture(e.pointerId); }catch(_){}
     mz.svg.addEventListener('pointermove', onDrag);
     mz.svg.addEventListener('pointerup', onDrop);
@@ -2476,15 +2621,15 @@
   }
 
   function mazeMove(e){
-    const p = mazeLocal(e);
-    const k = drag.which, mine = mz.trails[k], other = mz.trails[1 - k];
-    const r = mazeWalk(mz.maze, mine, drag.last, p, mz.cs, other);
+    const q = mazeLocal(e), p = { x:q.x + drag.off.x, y:q.y + drag.off.y };
+    const k = drag.which, mine = mz.walkers[k], other = mz.walkers[1 - k];
+    const r = mazeSlide(mz.maze, mine, drag.last, p, mz.cs, other, null, e.type === 'pointerup');
     drag.last = p;
     if (r.moved) mazeSync();
-    if (r.joined || mazeJoined(mz.maze, mine, other)) mazeWin(mine[mine.length - 1]);
+    if (r.joined || mazeJoined(mz.maze, mine, other)) mazeWin();
   }
 
-  /* Up or cancel: nothing to put back, each character is already on its head. */
+  /* Up or cancel: nothing to put back, each character is already on its rails. */
   function mazeRelease(){
     const el = drag.el;
     drag = null;
@@ -2494,7 +2639,7 @@
     el.removeEventListener('lostpointercapture', onLost);
   }
 
-  function mazeWin(at){
+  function mazeWin(){
     mz.done = true;
     if (drag) mazeRelease();
     /* The tally ticks so the pips fill, but a maze is not an answer: the
@@ -2502,7 +2647,8 @@
     state.hits += 1; state.mazeWins += 1;
     sayYes(); buzz(12);
     paintHud();
-    celebrate(mazeCenter(at));
+    const a = mazeAt(0), b = mazeAt(1);
+    celebrate({ x:(a.x + b.x) / 2, y:(a.y + b.y) / 2 });
     setTimeout(newRound, 1400);
   }
 
@@ -2563,7 +2709,7 @@
     el.removeEventListener('pointerup', onDrop);
     el.removeEventListener('pointercancel', onDrop);
     el.removeEventListener('lostpointercapture', onLost);
-    if (wasMaze) return;             // each character already sits on its trail head
+    if (wasMaze) return;             // each character already sits on its rails
     el.style.transform = '';
     el.classList.remove('held');
     litRegions(false, el);
@@ -2614,7 +2760,7 @@
   function onDrop(e){
     if (!drag || e.pointerId !== drag.id) return;
     if (drag.maze){
-      /* A finger's last position can be the meeting cell: walk it like a
+      /* A finger's last position can be the meeting: slide to it like a
          move. Cancel is the browser taking the gesture away: never score. */
       if (e.type === 'pointerup') mazeMove(e);
       if (drag) mazeRelease();

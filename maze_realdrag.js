@@ -1,5 +1,7 @@
-// Real (hit-tested) mouse input: press on either visible character and walk the route from its end,
-// with the solution painted and without it. Whichever end walks, it joins the other character.
+// Real (hit-tested) mouse input: press on either visible character and drag it along the route from its end
+// on a smooth path (many small moves, wobbling up to 0.15 cell either side of the corridor centre line, not
+// just cell centres), with the solution painted and without it. Whichever end walks, it meets the other
+// character (half a cell short of it, along the corridors) and the other one never moves.
 const { webkit } = require('playwright');
 const http = require('http'), fs = require('fs'), path = require('path');
 const srv = http.createServer((q, r) => { fs.readFile(path.join(__dirname, q.url.split('?')[0]), (e, d) => { if (e) { r.writeHead(404); r.end(); } else { r.writeHead(200, {'content-type':'text/html'}); r.end(d); } }); }).listen(8766, async () => {
@@ -34,19 +36,26 @@ const srv = http.createServer((q, r) => { fs.readFile(path.join(__dirname, q.url
     const top = await p.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y); return e.tagName + '.' + (e.getAttribute('class') || ''); }, [mc.x, mc.y]);
     const dx = mc.x - pts[0].x, dy = mc.y - pts[0].y;       // the press lands on the character, off its cell centre
     await p.mouse.move(mc.x, mc.y); await p.mouse.down();
-    for (const pt of pts.slice(1)) await p.mouse.move(pt.x + dx, pt.y + dy, { steps: 6 });
+    let q = 0;
+    for (let i = 1; i < pts.length; i++) {                   // smooth: eight small moves per cell, wobbling off the line
+      const a = pts[i - 1], b = pts[i], len = Math.hypot(b.x - a.x, b.y - a.y) || 1, px = -(b.y - a.y) / len, py = (b.x - a.x) / len;
+      for (let k = 1; k <= 8; k++) {
+        const w = k < 8 ? Math.sin(q++ * 0.9) * 0.15 * g.cs : 0;
+        await p.mouse.move(a.x + (b.x - a.x) * k / 8 + px * w + dx, a.y + (b.y - a.y) * k / 8 + py * w + dy, { steps: 2 });
+      }
+    }
     const got = await p.evaluate(from => {
       const d = document.querySelector('svg.maze').dataset;
       return { mine: (from === 'A' ? d.trailA : d.trailB).split(',').length, other: (from === 'A' ? d.trailB : d.trailA).split(',').length };
     }, from);
     await p.mouse.up(); await p.waitForTimeout(300);
     const tally = await p.evaluate(() => document.querySelector('#hitCount').textContent);
-    // it walked the whole route (the join step included), the other character never moved, and it counted
-    const ok = got.mine === pts.length && got.other === 1 && tally === '1' && g.painted === show && /^(svg|path)/.test(top);
+    // it walked the route up to half a cell short of the other character (the meeting), the other never moved, and it counted
+    const ok = got.mine === pts.length - 1 && got.other === 1 && tally === '1' && g.painted === show && /^(svg|path)/.test(top);
     if (!ok) bad++;
-    console.log(`${ok ? 'ok  ' : 'FAIL'} n=${n} touchCtx=${touch} way=${show ? 'painted' : 'hidden'} from=${from} hit=${top} trail ${got.mine}/${pts.length} other=${got.other} tally=${tally}`);
+    console.log(`${ok ? 'ok  ' : 'FAIL'} n=${n} touchCtx=${touch} way=${show ? 'painted' : 'hidden'} from=${from} hit=${top} trail ${got.mine}/${pts.length - 1} other=${got.other} tally=${tally}`);
     await c.close();
   }
-  console.log(bad ? bad + ' failed' : 'all real-input drags from either end joined the trails');
+  console.log(bad ? bad + ' failed' : 'all real-input smooth drags from either end met the other character');
   await b.close(); srv.close();
 });

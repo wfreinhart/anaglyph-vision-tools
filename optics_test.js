@@ -25,6 +25,7 @@ function modelFrom(html, extra){
   const js  = src.slice(src.indexOf('<script>') + 8, src.indexOf('</script>'));
   const names = NEEDED.concat(extra || []);
   const parts = [braceBlock(js, 'const LENS = {') + ';'];
+  if (js.indexOf('const MAZE = {') >= 0) parts.push(braceBlock(js, 'const MAZE = {') + ';');
   for (const name of names) parts.push(braceBlock(js, 'function ' + name + '('));
   const body = `
     let state = {}, calibBg = '#000000';
@@ -33,6 +34,7 @@ function modelFrom(html, extra){
       setState: s => { state = s; },
       setBg: b => { calibBg = b; },
       weights, through, visible, reading, inkFor
+      ${typeof extra !== 'undefined' && js.indexOf('const MAZE = {') >= 0 ? ', MAZE' : ''}
       ${(extra || []).map(n => ', ' + n).join('')}
     };`;
   return new Function(body)();
@@ -327,194 +329,315 @@ function mazeSuite(label, m, g){
   });
   t('same seed, same maze', JSON.stringify(m.makeMaze(6, 12345)) === JSON.stringify(m.makeMaze(6, 12345)));
 
-  console.log('  traversal');
-  let fastSafe = true, followed = true, backtracked = true, wallStops = true, wallsSeen = 0, hopsOk = true;
+  console.log('  rails: continuous movement');
+  const MZ = m.MAZE, EPS = 1e-6;
+  const openEdge = (maze, a, b) => nb(maze, a).indexOf(b) >= 0;
+  /* A walker is legal when its trail is a legal path from `from` (no repeats) and its tip
+     rests on the head or sits strictly inside an open passage that the trail has not used. */
+  const legalW = (maze, w, from) => {
+    const tr = w.trail;
+    if (tr[0] !== from || new Set(tr).size !== tr.length) return false;
+    for (let k = 1; k < tr.length; k++) if (!openEdge(maze, tr[k - 1], tr[k])) return false;
+    if (w.nx < 0) return w.f === 0;
+    return w.f > 0 && w.f < 1 && openEdge(maze, tr[tr.length - 1], w.nx) && tr.indexOf(w.nx) < 0;
+  };
+  const cellsOf = w => w.nx < 0 ? [w.trail[w.trail.length - 1]] : [w.trail[w.trail.length - 1], w.nx];
+  const pathLen = w => w.trail.length - 1 + w.f;
+  const clone = w => ({ trail:w.trail.slice(), nx:w.nx, f:w.f });
+  /* Watches a walker through every slide: each step lands on an open edge, travels no further
+     than MAZE.step along the rails (so, by Manhattan distance, no further than that on screen),
+     and two steps in a row share a cell (the same edge, or one junction). */
+  const watcher = (maze, w, from, rec) => {
+    let prev = { p:m.mazePoint(maze, w), cells:cellsOf(w), len:pathLen(w) };
+    return () => {
+      const p = m.mazePoint(maze, w), cells = cellsOf(w);
+      rec.steps++;
+      if (!legalW(maze, w, from)) rec.bad = (rec.bad || 'illegal state');
+      if (Math.abs(p.x - prev.p.x) + Math.abs(p.y - prev.p.y) > MZ.step + EPS) rec.bad = rec.bad || 'step too long';
+      if (!cells.some(c => prev.cells.indexOf(c) >= 0)) rec.bad = rec.bad || 'moved between unconnected edges';
+      if (Math.abs(pathLen(w) - prev.len) > MZ.step + EPS) rec.bad = rec.bad || 'trail length jumped';
+      rec.len.push(pathLen(w));
+      prev = { p:p, cells:cells, len:pathLen(w) };
+    };
+  };
+  const SZ = [3, 4, 6, 8];
+  let hostile = true, wallStops = true, wallsSeen = 0, follows = true, wobbles = true, grows = true, retracts = true, parallel = true, steps = 0, hostileEnd = true;
   const rnd = m.mazeRng(99);
-  SIZES.forEach(n => {
-    const cs = 60;
+  SZ.forEach(n => {
+    const cs = 60, ctr = i => ({ x:(i % n + 0.5) * cs, y:(Math.floor(i / n) + 0.5) * cs });
     for (let seed = 1; seed <= 60; seed++){
-      const mz = m.makeMaze(n, seed);
-      const ctr = i => ({ x:(i % n + 0.5) * cs, y:(Math.floor(i / n) + 0.5) * cs });
+      const mz = m.makeMaze(n, seed), route = m.mazeSolve(mz);
 
       /* A hostile finger: huge jumps all over (and off) the grid. */
-      let trail = [mz.start], last = ctr(mz.start);
-      for (let k = 0; k < 300; k++){
-        const p = { x:(rnd() * 1.6 - 0.3) * n * cs, y:(rnd() * 1.6 - 0.3) * n * cs };
-        m.mazeWalk(mz, trail, last, p, cs);
-        last = p;
-        if (!sound(mz, trail)) fastSafe = false;
+      {
+        const w = m.mazeWalker(mz.start), rec = { steps:0, len:[] };
+        let last = ctr(mz.start);
+        const watch = watcher(mz, w, mz.start, rec);
+        for (let k = 0; k < 300; k++){
+          const p = { x:(rnd() * 1.6 - 0.3) * n * cs, y:(rnd() * 1.6 - 0.3) * n * cs };
+          m.mazeSlide(mz, w, last, p, cs, null, watch);
+          last = p;
+          if (!legalW(mz, w, mz.start)) hostileEnd = false;
+        }
+        steps += rec.steps;
+        if (rec.bad){ hostile = false; console.log('    ' + rec.bad); }
       }
 
-      /* Straight through every wall at each head along the route, from the
-         cell centre and far past it. */
-      const walk = m.mazeSolve(mz);
-      for (let k = 0; k < walk.length; k++){
-        const head = walk[k];
-        trail = walk.slice(0, k + 1);
-        const hc = ctr(head);
+      /* Straight through every wall at each cell along the route, from the cell centre and far
+         past it: the character does not move at all. */
+      route.forEach((cell, k) => {
+        const hc = ctr(cell);
         [[0,-1,1],[1,0,2],[0,1,4],[-1,0,8]].forEach(d => {
-          if (mz.open[head] & d[2]) return;
+          if (mz.open[cell] & d[2]) return;
           wallsSeen++;
-          const before = trail.slice();
-          const r = m.mazeWalk(mz, trail, hc, { x:hc.x + d[0] * cs * 3, y:hc.y + d[1] * cs * 3 }, cs);
-          /* Off the grid there is nothing to stop at; inside it the walk must say so. */
-          const c = head % n + d[0], rr = Math.floor(head / n) + d[1];
-          const inside = c >= 0 && c < n && rr >= 0 && rr < n;
-          if (trail.join() !== before.join() || (inside && !r.blocked)) wallStops = false;
+          const w = { trail:route.slice(0, k + 1), nx:-1, f:0 }, before = JSON.stringify(w);
+          m.mazeSlide(mz, w, hc, { x:hc.x + d[0] * cs * 3, y:hc.y + d[1] * cs * 3 }, cs);
+          if (JSON.stringify(w) !== before) wallStops = false;
         });
+      });
+
+      /* Parallel corridors: from each cell the finger runs across a wall into the cell next door
+         (whose own corridor is open to it only the long way round) and on along that corridor.
+         The character stays inside its own passages the whole time. */
+      route.forEach((cell, k) => {
+        [[0,-1,1],[1,0,2],[0,1,4],[-1,0,8]].forEach(d => {
+          const c = cell % n + d[0], r = Math.floor(cell / n) + d[1];
+          if ((mz.open[cell] & d[2]) || c < 0 || c >= n || r < 0 || r >= n) return;
+          const w = { trail:route.slice(0, k + 1), nx:-1, f:0 }, rec = { steps:0, len:[] };
+          const at = ctr(cell), nbr = ctr(r * n + c);
+          const watch = watcher(mz, w, mz.start, rec);
+          m.mazeSlide(mz, w, at, nbr, cs, null, watch);
+          m.mazeSlide(mz, w, nbr, { x:nbr.x + d[1] * cs * 2, y:nbr.y + d[0] * cs * 2 }, cs, null, watch);
+          if (rec.bad || !legalW(mz, w, mz.start)) parallel = false;
+        });
+      });
+
+      /* Following the finger along the route: through the cell centres, and with a wobble of up
+         to 0.15 cell either side of the line (not at the corners). Grows continuously. */
+      [0, 0.15].forEach(wob => {
+        const w = m.mazeWalker(mz.start), rec = { steps:0, len:[] }, watch = watcher(mz, w, mz.start, rec);
+        let last = ctr(mz.start), side = 1;
+        for (let i = 1; i < route.length; i++){
+          const a = ctr(route[i - 1]), b = ctr(route[i]), px = -(b.y - a.y) / cs, py = (b.x - a.x) / cs;
+          for (let q = 1; q <= 4; q++){
+            const off = q === 4 ? 0 : wob * cs * side;
+            side = -side;
+            const p = { x:a.x + (b.x - a.x) * q / 4 + px * off, y:a.y + (b.y - a.y) * q / 4 + py * off };
+            m.mazeSlide(mz, w, last, p, cs, null, watch);
+            last = p;
+          }
+        }
+        for (let q = 1; q < rec.len.length; q++) if (rec.len[q] < rec.len[q - 1] - EPS) grows = false;
+        if (rec.bad || w.trail.join() !== route.join() || w.nx >= 0){ (wob ? wobbles = false : follows = false); }
+      });
+
+      /* Out along the route and back: the trail grows without a jump and retracts without one,
+         down to the start. */
+      {
+        const w = m.mazeWalker(mz.start), rec = { steps:0, len:[] }, watch = watcher(mz, w, mz.start, rec);
+        let last = ctr(mz.start);
+        const go = (to) => { for (let q = 1; q <= 10; q++){
+          const p = { x:last.x + (to.x - last.x) * q / 10, y:last.y + (to.y - last.y) * q / 10 };
+          m.mazeSlide(mz, w, { x:p.x - (to.x - last.x) / 10, y:p.y - (to.y - last.y) / 10 }, p, cs, null, watch); } last = to; };
+        for (let i = 1; i < route.length; i++) go(ctr(route[i]));
+        const peak = rec.len.length;
+        if (rec.bad || w.trail.join() !== route.join()) grows = false;
+        for (let i = route.length - 2; i >= 0; i--) go(ctr(route[i]));
+        for (let q = peak + 1; q < rec.len.length; q++) if (rec.len[q] > rec.len[q - 1] + EPS) retracts = false;
+        if (rec.bad || w.trail.join() !== String(mz.start) || w.nx >= 0 || w.f !== 0) retracts = false;
+        if (Math.max.apply(null, rec.len) < route.length - 1 - EPS) retracts = false;
       }
-
-      /* One hop per cell along the route reaches the goal. */
-      trail = [mz.start]; last = ctr(mz.start);
-      walk.slice(1).forEach(i => { m.mazeWalk(mz, trail, last, ctr(i), cs); last = ctr(i); });
-      if (trail.join() !== walk.join()) followed = false;
-
-      /* Back along the route retracts it, step by step, and stops at the start. */
-      for (let k = walk.length - 2; k >= 0; k--){
-        m.mazeWalk(mz, trail, last, ctr(walk[k]), cs); last = ctr(walk[k]);
-        if (trail.join() !== walk.slice(0, k + 1).join()) backtracked = false;
-      }
-      m.mazeWalk(mz, trail, last, { x:mz.start % n ? n * cs + 500 : -500, y:mz.start >= n ? n * cs + 500 : -500 }, cs);
-      if (trail.join() !== String(mz.start)) backtracked = false;
-
-      /* One huge flick from the start centre to the goal centre. */
-      trail = [mz.start];
-      m.mazeWalk(mz, trail, ctr(mz.start), ctr(mz.goal), cs);
-      if (!sound(mz, trail)) hopsOk = false;
     }
   });
-  t('a hostile finger (300 huge jumps per maze) never breaks the trail', fastSafe);
-  t('a flick through ' + wallsSeen + ' walls stops dead at each', wallStops && wallsSeen > 0);
-  t('one flick start to goal leaves a sound trail', hopsOk);
-  t('hopping cell by cell along the route reaches the goal', followed);
-  t('going back along the trail retracts it, down to the start', backtracked);
+  t('a hostile finger (300 huge jumps per maze, ' + steps + ' slides) never leaves the rails: every step on an open edge, short, and joined to the last', hostile && hostileEnd && steps > 1000);
+  t('a flick through ' + wallsSeen + ' walls does not move the character at all', wallStops && wallsSeen > 0);
+  t('a finger running across a wall and along the next corridor never pulls the character out of its own passages', parallel);
+  t('following the finger through the cell centres walks the whole route', follows);
+  t('and with a wobble of 0.15 cell either side of the line', wobbles);
+  t('the trail grows smoothly, never shrinking, while the finger goes forward', grows);
+  t('and retracts smoothly, never growing, back to the start', retracts);
+  t('a finger that lands a cell ahead is caught up with gradually: one sample slides at most ' + MZ.step + ' cell, and settling on release arrives', (() => { let ok = true;
+    SZ.forEach(n => { for (let seed = 1; seed <= 30; seed++){
+      const cs = 60, mz = m.makeMaze(n, seed), route = m.mazeSolve(mz), to = { x:(route[1] % n + 0.5) * cs, y:(Math.floor(route[1] / n) + 0.5) * cs };
+      const from = { x:(route[0] % n + 0.5) * cs, y:(Math.floor(route[0] / n) + 0.5) * cs };
+      const w = m.mazeWalker(route[0]), v = m.mazeWalker(route[0]);
+      m.mazeSlide(mz, w, to, to, cs);                                           // finger placed at the next cell's centre
+      if (w.nx !== route[1] || Math.abs(w.f - MZ.step) > EPS) ok = false;
+      m.mazeSlide(mz, v, to, to, cs, null, null, true);
+      if (v.trail.join() !== route[0] + ',' + route[1] || v.nx >= 0) ok = false;
+    } });
+    return ok; })());
+  t('a one-sample jump to the goal corner leaves a legal walker', (() => { let ok = true;
+    SZ.forEach(n => { const cs = 60, mz = m.makeMaze(n, 5), w = m.mazeWalker(mz.start);
+      m.mazeSlide(mz, w, { x:cs / 2, y:cs / 2 }, { x:(mz.goal % n + 0.5) * cs, y:(Math.floor(mz.goal / n) + 0.5) * cs }, cs);
+      if (!legalW(mz, w, mz.start)) ok = false; });
+    return ok; })());
 
-  /* Two characters: each trail starts at its own corner and a trail may not
-     cross a wall. Trails may overlap; the maze is solved only when the two
-     heads meet on one cell. */
-  console.log('  two trails, joining');
+  /* The way between two characters is measured along the corridors. */
+  console.log('  gap along the corridors');
   {
-    let bothSafe = true, bothWalls = 0, meet = true, headHit = true, bodyHit = true, wallBlocks = true, retract = true, overlapOk = true, noEarly = true, branches = 0;
-    SIZES.forEach(n => {
-      const cs = 60, ctr = i => ({ x:(i % n + 0.5) * cs, y:(Math.floor(i / n) + 0.5) * cs });
+    let startGap = true, sym = true, wallGap = true, sameEdge = true, wallPairs = 0, midEdge = true;
+    SZ.forEach(n => {
       for (let seed = 1; seed <= 60; seed++){
-        const mz = m.makeMaze(n, seed), route = m.mazeSolve(mz), L = route.length;
-        const hop = (tr, other, cells) => {            // one hop per cell, like a finger moving cell to cell
-          let last = ctr(tr[tr.length - 1]), res = null;
-          cells.forEach(i => { res = m.mazeWalk(mz, tr, last, ctr(i), cs, other); last = ctr(i); });
-          return res;
-        };
-
-        /* Hostile fingers on both characters at once, interleaved: both
-           trails stay legal paths; nothing is joined until the heads meet. */
-        let A = [mz.start], B = [mz.goal], lastA = ctr(mz.start), lastB = ctr(mz.goal), joined = false;
-        const rnd2 = m.mazeRng(seed * 7 + n);
-        for (let k = 0; k < 300 && !joined; k++){
-          const p = { x:(rnd2() * 1.6 - 0.3) * n * cs, y:(rnd2() * 1.6 - 0.3) * n * cs };
-          const useA = rnd2() < 0.5, mine = useA ? A : B, other = useA ? B : A;
-          const r = m.mazeWalk(mz, mine, useA ? lastA : lastB, p, cs, other);
-          if (useA) lastA = p; else lastB = p;
-          if (!sound(mz, A)) bothSafe = false;
-          const soundB = (() => { if (B[0] !== mz.goal) return false;
-            for (let q = 1; q < B.length; q++) if (nb(mz, B[q - 1]).indexOf(B[q]) < 0) return false; return true; })();
-          if (!soundB) bothSafe = false;
-          const headsMeet = A[A.length - 1] === B[B.length - 1];
-          if (r.joined){ joined = true; if (!headsMeet || !m.mazeJoined(mz, A, B)) bothSafe = false; }
-          else if (headsMeet || m.mazeJoined(mz, A, B)) noEarly = false;
-          if (A.some((c, q) => A.indexOf(c) !== q) || B.some((c, q) => B.indexOf(c) !== q)) bothSafe = false;
-        }
-
-        /* Meet in the middle: A walks the first half, B the second half, then
-           one more step either way joins. Until then nothing is joined. */
-        if (L >= 4){
-          const mid = Math.floor(L / 2) - 1;           // A reaches route[mid], B reaches route[mid + 2]
-          const a = [mz.start], b = [mz.goal];
-          hop(a, b, route.slice(1, mid + 1));
-          hop(b, a, route.slice(mid + 2, L - 1).reverse());
-          if (m.mazeJoined(mz, a, b)) noEarly = false;
-          const r = hop(b, a, [route[mid + 1]]);        // adjacent, still apart
-          if (r.joined || m.mazeJoined(mz, a, b)) noEarly = false;
-          const r2 = hop(b, a, [route[mid]]);           // onto A's head
-          if (!r2.joined || !m.mazeJoined(mz, a, b) || b[b.length - 1] !== route[mid]) headHit = false;
-          if (a.join() !== route.slice(0, mid + 1).join()) meet = false;
-        }
-        /* Either character can do the whole job alone: A to B's head, B to A's head. */
-        { const a = [mz.start], b = [mz.goal]; const r = hop(a, b, route.slice(1));
-          if (!r.joined || a.join() !== route.join() || !m.mazeJoined(mz, a, b)) meet = false; }
-        { const a = [mz.start], b = [mz.goal]; const r = hop(b, a, route.slice().reverse().slice(1));
-          if (!r.joined || b.join() !== route.slice().reverse().join() || !m.mazeJoined(mz, b, a)) meet = false; }
-
-        /* A cell in the middle of the other trail, not its head: B detours
-           into a branch off the route, so A reaches B's body first. That is
-           NOT a meeting: A walks over it, and only reaching B's head joins. */
-        for (let k = 1; k < L - 1; k++){
-          const side = nb(mz, route[k]).find(c => route.indexOf(c) < 0);
-          if (side === undefined) continue;
-          branches++;
-          const a = [mz.start], b = [mz.goal];
-          hop(a, b, route.slice(1, k));
-          hop(b, a, route.slice(k, L - 1).reverse());
-          hop(b, a, [side]);
-          if (m.mazeJoined(mz, a, b) || b.indexOf(route[k]) < 0 || b[b.length - 1] !== side) bodyHit = false;
-          const bBefore = b.join();
-          const r = hop(a, b, [route[k]]);
-          if (r.joined || m.mazeJoined(mz, a, b) || a[a.length - 1] !== route[k] || b.join() !== bBefore ||
-              b.indexOf(route[k]) < 0 || b[b.length - 1] === route[k]) bodyHit = false;
-          /* overlapping trails retract correctly: A back off the body, B untouched */
-          const a2 = a.slice();
-          const rb = hop(a2, b, [route[k - 1]]);
-          if (rb.joined || a2.join() !== a.slice(0, -1).join() || b.join() !== bBefore) overlapOk = false;
-          /* B retracting from its branch onto A's head meets A (retraction can join) */
-          const b2 = b.slice();
-          const rr = hop(b2, a, [route[k]]);
-          if (!rr.joined || !m.mazeJoined(mz, a, b2) || b2.join() !== bBefore.split(',').slice(0, -1).join()) overlapOk = false;
-          /* continuing along B's trail to its head wins */
-          const r2 = hop(a, b, [side]);
-          if (!r2.joined || !m.mazeJoined(mz, a, b) || a[a.length - 1] !== b[b.length - 1]) bodyHit = false;
-          break;
-        }
-
-        /* No join through a wall: from each head on the route, a flick
-           through a closed wall toward the other trail changes nothing and
-           does not join. The other trail is the rest of the route. */
-        for (let k = 1; k < L - 1; k++){
-          const a = route.slice(0, k + 1), b = [route[L - 1]];
-          hop(b, a, route.slice(k + 1, L - 1).reverse());
-          const head = a[k];
-          [[0,-1,1],[1,0,2],[0,1,4],[-1,0,8]].forEach(d => {
-            if (mz.open[head] & d[2]) return;
-            const c = head % n + d[0], rr = Math.floor(head / n) + d[1];
-            if (c < 0 || c >= n || rr < 0 || rr >= n) return;
-            const target = rr * n + c;
-            if (b.indexOf(target) < 0) return;           // only walls that face the other trail
-            bothWalls++;
-            const before = a.slice(), hc = ctr(head);
-            const r = m.mazeWalk(mz, a, hc, { x:hc.x + d[0] * cs * 3, y:hc.y + d[1] * cs * 3 }, cs, b);
-            if (r.joined || a.join() !== before.join() || m.mazeJoined(mz, a, b) || !r.blocked) wallBlocks = false;
-          });
-        }
-
-        /* Retraction undoes progress: walk out, walk back, and nothing is
-           joined or left over, even next to the other trail. */
-        if (L >= 6){
-          const a = [mz.start], b = [mz.goal];
-          hop(b, a, route.slice(L - 3, L - 1).reverse());     // B two cells in
-          hop(a, b, route.slice(1, 3));
-          hop(a, b, [route[1]]);
-          hop(a, b, [route[0]]);
-          if (a.join() !== String(mz.start) || m.mazeJoined(mz, a, b)) retract = false;
+        const mz = m.makeMaze(n, seed), route = m.mazeSolve(mz);
+        const A = m.mazeWalker(mz.start), B = m.mazeWalker(mz.goal);
+        if (Math.abs(m.mazeGap(mz, A, B) - (route.length - 1)) > EPS) startGap = false;
+        /* side by side across a wall: one cell apart on screen, further along the corridors */
+        for (let i = 0; i < n * n; i++) [[1,2],[n,4]].forEach(([dc, bit]) => {
+          const j = i + dc;
+          if (j >= n * n || (dc === 1 && i % n === n - 1) || (mz.open[i] & bit)) return;
+          wallPairs++;
+          const g = m.mazeGap(mz, m.mazeWalker(i), m.mazeWalker(j));
+          if (g < 3 - EPS || m.mazeJoined(mz, m.mazeWalker(i), m.mazeWalker(j))) wallGap = false;
+        });
+        /* two walkers on one passage, either way round, and on neighbouring passages */
+        for (let k = 0; k + 1 < route.length; k++){
+          const u = route[k], v = route[k + 1];
+          const a = { trail:[u], nx:v, f:0.2 }, b = { trail:[u], nx:v, f:0.7 }, c = { trail:[v], nx:u, f:0.1 };
+          if (Math.abs(m.mazeGap(mz, a, b) - 0.5) > EPS || Math.abs(m.mazeGap(mz, a, c) - 0.7) > EPS) sameEdge = false;
+          if (Math.abs(m.mazeGap(mz, a, c) - m.mazeGap(mz, c, a)) > EPS) sym = false;
+          if (k + 2 < route.length){
+            const x = route[k + 2], d = { trail:[v], nx:x, f:0.3 };
+            if (Math.abs(m.mazeGap(mz, a, d) - (0.8 + 0.3)) > EPS) midEdge = false;     // a is 0.8 from v; d is 0.3 past it
+          }
         }
       }
     });
-    t('both trails stay legal paths and nothing joins before the heads meet, under hostile fingers', bothSafe && noEarly);
-    t('meeting in the middle: the last step onto the other head joins them', meet && headHit);
-    t('one character alone can reach the other, from either end', meet);
-    t('walking over the middle of the other trail does NOT join; reaching its head after does (' + branches + ' branch cases)', bodyHit && branches > 20);
-    t('overlapping trails retract correctly for both', overlapOk && branches > 20);
-    t('a flick through ' + bothWalls + ' walls that face the other trail never joins', wallBlocks && bothWalls > 20);
-    t('retracting a trail undoes its progress, and nothing is joined', retract);
-    t('mazeJoined: heads on one cell only', m.mazeJoined({}, [1, 2, 3], [9, 8]) === false && m.mazeJoined({}, [1, 2, 3], [9, 3]) === true &&
-      m.mazeJoined({}, [3, 2, 1], [9, 3]) === false && m.mazeJoined({}, [4], [4]) === true);
+    t('the gap at the start is the length of the route', startGap);
+    t('two characters on one passage are |difference| apart, whichever way round (and the gap is symmetric)', sameEdge && sym);
+    t('two characters on neighbouring passages are the distance through the shared junction', midEdge);
+    t('side by side across ' + wallPairs + ' walls the gap is the way round (3+ cells), never the screen distance, and they have not met', wallGap && wallPairs > 50);
+  }
+
+  /* Two characters: each starts at its own corner; they have met when the way between them is
+     MAZE.meet or less. Trails may overlap and cross; a character on the other's trail has not met. */
+  console.log('  two characters, meeting');
+  {
+    let safe = true, noEarly = true, joinsOk = true, mid = true, body = true, bodies = 0, wallBlocks = true, bothWalls = 0,
+        retract = true, relJoin = true, thresholdExact = true, early = 0;
+    const hostileRnd = m.mazeRng(4242);
+    SZ.forEach(n => {
+      const cs = 60, ctr = i => ({ x:(i % n + 0.5) * cs, y:(Math.floor(i / n) + 0.5) * cs });
+      for (let seed = 1; seed <= 60; seed++){
+        const mz = m.makeMaze(n, seed), route = m.mazeSolve(mz), L = route.length;
+        const mk = (cells, tip) => ({ trail:cells.slice(), nx:tip ? tip[0] : -1, f:tip ? tip[1] : 0 });
+        /* a finger for one walker: remembers where it is */
+        const fingerOf = (w) => { const f = { at:m.mazePoint(mz, w), res:null };
+          f.at = { x:f.at.x * cs, y:f.at.y * cs };
+          f.go = (to, other) => { f.res = m.mazeSlide(mz, w, f.at, to, cs, other); f.at = to; return f.res; };
+          f.hop = (cells, other) => { let r = null; cells.forEach(i => { r = f.go(ctr(i), other); }); return r; };
+          return f; };
+
+        /* Hostile fingers on both characters at once, interleaved: both stay legal, and a slide
+           reports a meeting exactly when the gap is at or under MAZE.meet. */
+        {
+          const A = m.mazeWalker(mz.start), B = m.mazeWalker(mz.goal), fa = fingerOf(A), fb = fingerOf(B);
+          let met = false;
+          for (let k = 0; k < 300 && !met; k++){
+            const p = { x:(hostileRnd() * 1.6 - 0.3) * n * cs, y:(hostileRnd() * 1.6 - 0.3) * n * cs };
+            const useA = hostileRnd() < 0.5, r = useA ? fa.go(p, B) : fb.go(p, A);
+            if (!legalW(mz, A, mz.start) || !legalW(mz, B, mz.goal)) safe = false;
+            const g = m.mazeGap(mz, A, B);
+            if (r.joined){ met = true; if (g > MZ.meet + EPS) joinsOk = false; }
+            else if (g <= MZ.meet + EPS) noEarly = false;
+          }
+        }
+
+        /* One character does the whole job alone, from either end: it meets the other exactly when
+           the gap reaches MAZE.meet (not before), a little over half a cell short of its cell. */
+        [false, true].forEach(fromGoal => {
+          const rt = fromGoal ? route.slice().reverse() : route;
+          const A = m.mazeWalker(rt[0]), B = m.mazeWalker(rt[L - 1]), fa = fingerOf(A);
+          let r = null, gapBefore = Infinity;
+          for (let i = 1; i < L && !(r && r.joined); i++){
+            // walk the hop in finger samples of a tenth of a cell so the gap just before the meeting is seen
+            const a = ctr(rt[i - 1]), b = ctr(rt[i]);
+            for (let q = 1; q <= 10 && !(r && r.joined); q++){
+              gapBefore = m.mazeGap(mz, A, B);
+              r = fa.go({ x:a.x + (b.x - a.x) * q / 10, y:a.y + (b.y - a.y) * q / 10 }, B);
+            }
+          }
+          if (!r || !r.joined || !legalW(mz, A, rt[0])) joinsOk = false;
+          else {
+            const g = m.mazeGap(mz, A, B);
+            if (g > MZ.meet + EPS || gapBefore <= MZ.meet || g < MZ.meet - MZ.step - EPS) thresholdExact = false;
+            if (A.trail.join() !== rt.slice(0, L - 1).join() || A.nx !== rt[L - 1]) joinsOk = false;
+          }
+        });
+
+        /* Meet in the middle: A rests on route[mid], B on route[mid + 2] (two cells apart), then
+           B comes to route[mid + 1] (one apart; not met) and on toward A (met half a cell short). */
+        if (L >= 4){
+          const k = Math.floor(L / 2) - 1;
+          const A = m.mazeWalker(mz.start), B = m.mazeWalker(mz.goal), fa = fingerOf(A), fb = fingerOf(B);
+          fa.hop(route.slice(1, k + 1), B);
+          fb.hop(route.slice(k + 2, L - 1).reverse(), A);
+          if (m.mazeJoined(mz, A, B) || Math.abs(m.mazeGap(mz, A, B) - 2) > EPS) noEarly = false;
+          const r1 = fb.hop([route[k + 1]], A);
+          if (r1.joined || m.mazeJoined(mz, A, B) || Math.abs(m.mazeGap(mz, A, B) - 1) > EPS) noEarly = false;
+          const r2 = fb.hop([route[k]], A);
+          if (!r2.joined || !m.mazeJoined(mz, A, B)) mid = false;
+          if (A.trail.join() !== route.slice(0, k + 1).join() || A.nx >= 0) mid = false;
+        }
+
+        /* A on the middle of B's trail is not a meeting. B walks the route back from the goal, past
+           route[k], and into a side passage off it; A then walks onto route[k] and has not met B
+           (B's tip is a cell away); on into the side passage it has. B retracting onto A meets too. */
+        for (let k = 1; k < L - 1; k++){
+          const side = nb(mz, route[k]).find(c => route.indexOf(c) < 0);
+          if (side === undefined) continue;
+          bodies++;
+          const A = m.mazeWalker(mz.start), B = m.mazeWalker(mz.goal), fa = fingerOf(A), fb = fingerOf(B);
+          fa.hop(route.slice(1, k), B);
+          fb.hop(route.slice(k, L - 1).reverse().concat([side]), A);
+          if (m.mazeJoined(mz, A, B) || B.trail.indexOf(route[k]) < 0 || B.trail[B.trail.length - 1] !== side) body = false;
+          const bBefore = JSON.stringify(B), B2 = clone(B), fb2 = fingerOf(B2);
+          const r = fa.hop([route[k]], B);
+          if (r.joined || m.mazeJoined(mz, A, B) || A.trail[A.trail.length - 1] !== route[k] || JSON.stringify(B) !== bBefore || B.trail.indexOf(route[k]) < 0) body = false;
+          if (Math.abs(m.mazeGap(mz, A, B) - 1) > EPS) body = false;
+          const A2 = clone(A);
+          const r2 = fa.hop([side], B);
+          if (!r2.joined || !m.mazeJoined(mz, A, B)) body = false;
+          /* B retracting from its side passage onto A's tip meets it, and un-draws its own trail only */
+          const aBefore = JSON.stringify(A2), rr = fb2.hop([route[k]], A2);
+          if (!rr.joined || !m.mazeJoined(mz, A2, B2) || JSON.stringify(A2) !== aBefore || B2.trail.length > B.trail.length) relJoin = false;
+          break;
+        }
+
+        /* No meeting through a wall: from each cell on the route, the finger pushes the character
+           through a closed wall that faces a cell of the other character's trail. Nothing moves
+           and they have not met. */
+        for (let k = 1; k < L - 1; k++){
+          const A = mk(route.slice(0, k + 1)), B = m.mazeWalker(route[L - 1]), fb = fingerOf(B);
+          fb.hop(route.slice(k + 1, L - 1).reverse(), A);
+          const hc = ctr(route[k]);
+          [[0,-1,1],[1,0,2],[0,1,4],[-1,0,8]].forEach(d => {
+            if (mz.open[route[k]] & d[2]) return;
+            const c = route[k] % n + d[0], rr = Math.floor(route[k] / n) + d[1];
+            if (c < 0 || c >= n || rr < 0 || rr >= n || B.trail.indexOf(rr * n + c) < 0) return;
+            bothWalls++;
+            const A2 = clone(A), before = JSON.stringify(A2);
+            const r = m.mazeSlide(mz, A2, hc, { x:hc.x + d[0] * cs * 3, y:hc.y + d[1] * cs * 3 }, cs, B);
+            if (r.joined || JSON.stringify(A2) !== before || m.mazeJoined(mz, A2, B)) wallBlocks = false;
+          });
+        }
+
+        /* Retraction undoes progress: out two cells, back to the start, nothing met. */
+        if (L >= 6){
+          const A = m.mazeWalker(mz.start), B = m.mazeWalker(mz.goal), fa = fingerOf(A), fb = fingerOf(B);
+          fb.hop(route.slice(L - 3, L - 1).reverse(), A);
+          fa.hop(route.slice(1, 3), B); fa.hop([route[1]], B); fa.hop([route[0]], B);
+          if (A.trail.join() !== String(mz.start) || A.nx >= 0 || m.mazeJoined(mz, A, B)) retract = false;
+        }
+      }
+    });
+    t('both characters stay on the rails, under hostile fingers on both at once', safe);
+    t('a slide reports the meeting exactly when the gap reaches ' + MZ.meet + ' cell, never before', joinsOk && noEarly);
+    t('one character alone reaches the other from either end, stopping ' + MZ.meet + ' cell short (not earlier than that)', joinsOk && thresholdExact);
+    t('meeting in the middle: two cells apart, one cell apart, then half a cell closes it', mid && noEarly);
+    t('standing on the middle of the other trail does NOT meet; reaching its tip after does (' + bodies + ' side-passage cases)', body && relJoin && bodies > 20);
+    t('a flick through ' + bothWalls + ' walls that face the other character never meets and never moves', wallBlocks && bothWalls > 20);
+    t('backing a trail out and in leaves nothing met', retract);
   }
 
   console.log('  inks');
@@ -566,7 +689,7 @@ function mazeSuite(label, m, g){
     [...code.matchAll(/stroke\('[a-z]+', /g)].length === 3);
   t('both characters take their colour from mazeInks, the same full ink', /makeThing\(mz\.shapes\[k\], ink\.piece,/.test(code) && !/ink\.(mover|goal)\b/.test(code));
   t('both trails are painted from one call with ink.trail', [...code.matchAll(/stroke\('mztrail', ink\.trail,/g)].length === 1 && /\[0, 1\]\.map\(\(\) => stroke\('mztrail'/.test(code));
-  ['mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalk', 'mazeJoined'].forEach(name => {
+  ['mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide'].forEach(name => {
     const fnSrc = braceBlock(src, 'function ' + name + '(');
     t(name + ' touches no DOM and no state', !/\b(document|window|state|field|mz)\b/.test(fnSrc));
   });
@@ -597,7 +720,7 @@ meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 toneArtSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 guardSuite('puzzle.html', guardsFrom('puzzle.html'), modelFrom('puzzle.html'));
-mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalk', 'mazeJoined']),
+mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide']),
           guardsFrom('puzzle.html'));
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -78,6 +78,8 @@ const info = page => page.evaluate(() => {
     n:Number(s.dataset.n), cs:Number(s.dataset.cs), open:s.dataset.open.split(',').map(Number),
     start:Number(s.dataset.start), goal:Number(s.dataset.goal), trail:s.dataset.trailA.split(',').map(Number), trailB:s.dataset.trailB.split(',').map(Number),
     left:r.left - vb.x, top:r.top - vb.y,          // client position of the maze's own (0,0)
+    posA:s.dataset.posA.split(',').map(Number), posB:s.dataset.posB.split(',').map(Number),   // [head, next, fraction]
+    ww:parseFloat(getComputedStyle(document.querySelector('.mzwall')).strokeWidth),
     mover:mv ? box(mv) : null, goalEl:gl ? box(gl) : null, moverShape:mv && mv.dataset.shape, goalShape:gl && gl.dataset.shape
   };
 });
@@ -408,7 +410,7 @@ async function closeSheet(page){
     t('the reward is binocular ink (black on white), only after the goal', burst.every(c => c === 'rgb(0, 0, 0)'), burst[0]);
     t('the tally counts it', (await page.textContent('#hitCount')) === '1');
     const J = await info(page);
-    t('the mover finished on the goal', Math.hypot(J.mover.x - J.goalEl.x, J.mover.y - J.goalEl.y) < 1.5);
+    t('the two characters have met: half a cell apart or less, along the corridor', Math.hypot(J.mover.x - J.goalEl.x, J.mover.y - J.goalEl.y) <= J.cs * 0.5 + 1.5);
     await up(page, ctr(I, I.goal));
     // dragging during the celebration does nothing
     const trail1 = (await info(page)).trail.join();
@@ -541,26 +543,31 @@ async function closeSheet(page){
     t(n + 'x' + n + ': the other character stayed put', I.trail.join() === String(I.start));
     const atB = ctr(I, I.trailB[I.trailB.length - 1]);
     t(n + 'x' + n + ': it sits on its trail head', Math.hypot(I.goalEl.x - atB.x, I.goalEl.y - atB.y) < 1.5);
-    // a flick through a wall from its head does nothing
-    const head = I.trailB[I.trailB.length - 1], hc = ctr(I, head);
-    let flicked = 0, held = true;
-    for (const d of D){
-      const r = Math.floor(head / I.n) + d[1], c = head % I.n + d[0];
-      if ((I.open[head] & d[2]) || r < 0 || r >= I.n || c < 0 || c >= I.n) continue;
-      const before = I.trailB.join(), to = { x:hc.x + d[0] * I.cs * 3, y:hc.y + d[1] * I.cs * 3 };
-      await down(page, hc); await move(page, to); await up(page, to);
-      flicked++;
-      if ((await info(page)).trailB.join() !== before) held = false;
+    // a flick through a wall from its head does nothing (walk the head on along the route until it has a wall to flick at)
+    let at = 3, flicked = 0, held = true;
+    for (; at <= rev.length - 2; at++){
+      I = await info(page);
+      const head = I.trailB[I.trailB.length - 1], hc = ctr(I, head);
+      for (const d of D){
+        const r = Math.floor(head / I.n) + d[1], c = head % I.n + d[0];
+        if ((I.open[head] & d[2]) || r < 0 || r >= I.n || c < 0 || c >= I.n) continue;
+        const before = I.trailB.join(), to = { x:hc.x + d[0] * I.cs * 3, y:hc.y + d[1] * I.cs * 3 };
+        await down(page, hc); await move(page, to); await up(page, to);
+        flicked++;
+        if ((await info(page)).trailB.join() !== before) held = false;
+      }
+      if (flicked > 0 || n === 3) break;
+      await hop(page, I, [rev[at]], true, true);
     }
     t(n + 'x' + n + ': a flick through a wall does not move the second trail (' + flicked + ' walls)', held && (n === 3 || flicked > 0));
     // finish from this end: walks onto the other character at the start corner
     I = await info(page);
-    await hop(page, I, rev.slice(3), false, true);
+    await hop(page, I, rev.slice(Math.max(3, I.trailB.length)), false, true);
     await sleep(60);
     I = await info(page);
-    t(n + 'x' + n + ': solving from the goal end joins the trails and fires the reward',
-      I.trailB[I.trailB.length - 1] === I.start && legal(I, I.trailB, I.goal) && (await page.locator('#burst span').count()) === 16 &&
-      (await page.textContent('#hitCount')) === '1', I.trailB.join());
+    t(n + 'x' + n + ': solving from the goal end meets the other character (half a cell short of it) and fires the reward',
+      I.trailB[I.trailB.length - 1] === rev[rev.length - 2] && I.posB[1] === I.start && I.posB[2] >= 0.5 - 1e-3 && legal(I, I.trailB, I.goal) &&
+      (await page.locator('#burst span').count()) === 16 && (await page.textContent('#hitCount')) === '1', I.trailB.join() + ' ' + I.posB.join());
     await page.ctx.close();
   }
   {
@@ -666,6 +673,148 @@ async function closeSheet(page){
     await down(page, far); await move(page, ctr(I, I.n + 2)); await up(page, far);
     I = await info(page);
     t('pressing on neither character grabs nothing', I.trail.length === 1 && I.trailB.length === 1);
+    await page.ctx.close();
+  }
+
+
+  /* ===== 9. continuous movement: rails, no teleports, no wall touched, every paint on the ramp ===== */
+  console.log('\ncontinuous movement');
+  const clientPt = (I, pos) => {
+    const a = ctr(I, pos[0]), b = pos[1] >= 0 ? ctr(I, pos[1]) : a;
+    return { x:a.x + (b.x - a.x) * pos[2], y:a.y + (b.y - a.y) * pos[2] };
+  };
+  const wallRects = I => {                        // the painted walls, client px: closed passages and the outer square, with square caps
+    const out = [], h = I.ww / 2, n = I.n, cs = I.cs;
+    const add = (x0, y0, x1, y1) => out.push([I.left + x0 - h, I.top + y0 - h, I.left + x1 + h, I.top + y1 + h]);
+    add(0, 0, n * cs, 0); add(0, n * cs, n * cs, n * cs); add(0, 0, 0, n * cs); add(n * cs, 0, n * cs, n * cs);
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++){
+      const i = r * n + c;
+      if (c < n - 1 && !(I.open[i] & 2)) add((c + 1) * cs, r * cs, (c + 1) * cs, (r + 1) * cs);
+      if (r < n - 1 && !(I.open[i] & 4)) add(c * cs, (r + 1) * cs, (c + 1) * cs, (r + 1) * cs);
+    }
+    return out;
+  };
+  const readNow = page => page.evaluate(() => {
+    const d = document.querySelector('svg.maze').dataset;
+    return { pa:d.posA.split(',').map(Number), pb:d.posB.split(',').map(Number), ta:d.trailA.split(',').map(Number), tb:d.trailB.split(',').map(Number),
+             el:[...document.querySelectorAll('.mzchar')].map(e => { const b = e.getBoundingClientRect(); return { l:b.left, t:b.top, r:b.right, b:b.bottom }; }) };
+  });
+  const onEdge = (I, pos) => pos[1] < 0 ? pos[2] === 0 : (I.open[pos[0]] & D.find(d => (Math.floor(pos[0] / I.n) + d[1]) * I.n + (pos[0] % I.n) + d[0] === pos[1])?.[2]) > 0 && pos[2] > 0 && pos[2] < 1;
+
+  for (const vp of [{ width:1024, height:768 }, { width:768, height:1024 }]) for (const who of ['A', 'B']){
+    const tag = '8x8 ' + vp.width + 'x' + vp.height + ' char ' + who;
+    const page = await openPage(browser, { viewport:vp, game:{ mazeN:8, mazeSlow:false } });
+    let I = await info(page);
+    const sol = solve(I), route = who === 'A' ? sol : sol.slice().reverse();
+    const rects = wallRects(I), cs = I.cs;
+    // the finger's polyline: route centres, sampled every 0.12 cell, wobbling up to 0.15 cell off the line
+    const line = [];
+    for (let i = 1; i < route.length; i++){
+      const a = ctr(I, route[i - 1]), b = ctr(I, route[i]), px = -(b.y - a.y) / cs, py = (b.x - a.x) / cs;
+      for (let q = 1; q <= 8; q++) line.push({ x:a.x + (b.x - a.x) * q / 8 + px * Math.sin(line.length * 0.9) * 0.15 * cs * (q < 8 ? 1 : 0),
+                                              y:a.y + (b.y - a.y) * q / 8 + py * Math.sin(line.length * 0.9) * 0.15 * cs * (q < 8 ? 1 : 0) });
+    }
+    const upto = Math.floor(line.length * 0.6);
+    const out = line.slice(0, upto), back = line.slice(0, upto - 1).reverse().concat([ctr(I, route[0])]);
+    let bad = [], samples = 0, prevPt = null, lens = [], maxJump = 0;
+    const check = async (label) => {
+      const S = await readNow(page), pos = who === 'A' ? S.pa : S.pb, tr = who === 'A' ? S.ta : S.tb;
+      samples++;
+      if (!onEdge(I, pos)) bad.push(label + ' not on an open edge ' + pos.join('/'));
+      [[S.pa, 0], [S.pb, 1]].forEach(([ps, k]) => {
+        const want = clientPt(I, ps), e = S.el[k], got = { x:(e.l + e.r) / 2, y:(e.t + e.b) / 2 };
+        if (!onEdge(I, ps)) bad.push(label + ' char ' + k + ' off the rails');
+        if (Math.hypot(want.x - got.x, want.y - got.y) > 1.5) bad.push(label + ' char ' + k + ' drawn off its position');
+        rects.forEach(R => { if (e.l < R[2] - 0.01 && e.r > R[0] + 0.01 && e.t < R[3] - 0.01 && e.b > R[1] + 0.01) bad.push(label + ' char ' + k + ' box over a wall'); });
+      });
+      const pt = clientPt(I, pos);
+      if (prevPt) maxJump = Math.max(maxJump, Math.abs(pt.x - prevPt.x) + Math.abs(pt.y - prevPt.y));
+      prevPt = pt;
+      lens.push(tr.length - 1 + (pos[1] >= 0 ? pos[2] : 0));
+      return S;
+    };
+    await down(page, ctr(I, route[0]));
+    const t0 = line.length;
+    let k = 0;
+    for (const p of out){
+      await move(page, p); k++;
+      await check('out ' + k);
+      if (k === Math.floor(upto / 3) || k === Math.floor(upto * 2 / 3)) await audit(page, inkOf(CAL.std, 'L'), tag + ' mid-drag ' + k);
+    }
+    const peak = lens.length;
+    for (const p of back){ await move(page, p); await check('back'); }
+    await up(page, ctr(I, route[0]));
+    let grewOk = true, shrankOk = true;
+    // the finger wobbles 0.15 cell off the line, so at a corner the trail may dip or rise by up to about that much; never more
+    let dip = 0;
+    for (let q = 1; q < peak; q++) dip = Math.max(dip, lens[q - 1] - lens[q]);
+    for (let q = peak; q < lens.length; q++) dip = Math.max(dip, lens[q] - lens[q - 1]);
+    grewOk = dip <= 0.25;
+    shrankOk = Math.max.apply(null, lens) >= route.length * 0.55 - 1;
+    const E = await info(page);
+    t(tag + ': ' + samples + ' sampled positions: always on an open edge, drawn where the model says, box never over a wall', bad.length === 0, bad.slice(0, 3).join(' | '));
+    t(tag + ': no jump between samples over ' + (0.6).toFixed(1) + ' cell (largest ' + (maxJump / cs).toFixed(2) + ' cell)', maxJump <= cs * 0.6, maxJump / cs);
+    t(tag + ': the trail grew going out and shrank coming back, never by a jump or a reversal bigger than the wobble (' + dip.toFixed(2) + ' cell)', grewOk && shrankOk, dip);
+    t(tag + ': coming back leaves just the start, at rest', (who === 'A' ? E.trail : E.trailB).length === 1 && (who === 'A' ? E.posA : E.posB)[1] === -1);
+    t(tag + ': no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+  {
+    // fast diagonal swipes and flicks on a 6x6, from either character: after every one both stay on the rails and clear of walls
+    const page = await openPage(browser, { game:{ mazeN:6 } });
+    let I = await info(page);
+    let rects = wallRects(I);
+    const cs = I.cs, bad = [];
+    let rs = 12345;
+    const rnd = () => (rs = (rs * 1103515245 + 12345) % 2147483648) / 2147483648;
+    let swipes = 0;
+    for (let round = 0; round < 40; round++){
+      if (await page.locator('#burst span').count()){ await sleep(1700); I = await info(page); rects = wallRects(I); }   // met: wait for the next maze
+      const S0 = await readNow(page), who = rnd() < 0.5 ? 0 : 1;
+      const from = clientPt(I, who ? S0.pb : S0.pa);
+      await down(page, from);
+      for (let q = 0; q < 6; q++){
+        await move(page, { x:I.left + (rnd() * 1.4 - 0.2) * I.n * cs, y:I.top + (rnd() * 1.4 - 0.2) * I.n * cs });
+        swipes++;
+        const S = await readNow(page);
+        [[S.pa, 0], [S.pb, 1]].forEach(([ps, k]) => {
+          if (!onEdge(I, ps)) bad.push('char ' + k + ' off the rails ' + ps.join('/'));
+          const e = S.el[k];
+          rects.forEach(R => { if (e.l < R[2] - 0.01 && e.r > R[0] + 0.01 && e.t < R[3] - 0.01 && e.b > R[1] + 0.01) bad.push('char ' + k + ' box over a wall'); });
+        });
+        if (await page.locator('#burst span').count()) break;
+      }
+      if (!(await page.locator('#burst span').count())) await fire(page, 'pointercancel', from);
+    }
+    t(swipes + ' fast random swipes: both characters always on the rails and clear of every wall', bad.length === 0 && swipes > 100, bad.slice(0, 3).join(' | '));
+    t('no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+  {
+    // a diagonal swipe through a corner of walls: from a cell, flick toward the diagonal neighbour that is only joined the long way round
+    const page = await openPage(browser, { game:{ mazeN:8 } });
+    let I = await info(page);
+    let tried = 0, held = true, why = '';
+    const sol = solve(I);
+    for (let k = 0; k < sol.length; k++){
+      I = await info(page);
+      if (I.trail[I.trail.length - 1] !== sol[k]) await hop(page, I, [sol[k]]);
+      I = await info(page);
+      for (const d of [[1, 1], [1, -1], [-1, 1], [-1, -1]]){
+        const c = sol[k] % I.n + d[0], r = Math.floor(sol[k] / I.n) + d[1];
+        if (c < 0 || c >= I.n || r < 0 || r >= I.n) continue;
+        // when the diagonal runs back over its own trail the character legitimately follows the finger back along it
+        const near = [r * I.n + c, r * I.n + sol[k] % I.n, Math.floor(sol[k] / I.n) * I.n + c];
+        if (near.some(x => I.trail.slice(0, -1).indexOf(x) >= 0)) continue;
+        const hc = ctr(I, sol[k]), to = { x:hc.x + d[0] * I.cs, y:hc.y + d[1] * I.cs };
+        await down(page, hc); await move(page, to); await move(page, hc); await up(page, hc);
+        tried++;
+        const J = await info(page);
+        // the finger went across the corner and back; where an open arm tied the character may have taken either, but it is on the rails with a legal trail
+        if (!onEdge(J, J.posA) || !sound(J)){ held = false; why = why || (sol[k] + ' d=' + d + ' after ' + J.trail.join() + '/' + J.posA.join()); }
+      }
+    }
+    t('diagonal swipes across wall corners and back (' + tried + ' of them) leave the character on the rails with a legal trail', held && tried > 5, why);
     await page.ctx.close();
   }
 
