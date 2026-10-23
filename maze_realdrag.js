@@ -23,7 +23,7 @@ const srv = http.createServer((q, r) => { fs.readFile(path.join(__dirname, q.url
       await p.click('#done'); await p.waitForTimeout(400);
     }
     const inMode = await p.evaluate(() => document.querySelector('svg.maze').dataset.colours);
-    const wayOffered = mode === 'one' || mode === 'trail';
+    const wayOffered = mode === 'one';
     const g = await p.evaluate(() => {
       const s = document.querySelector('svg.maze'), d = s.dataset, N = Number(d.n), cs = Number(d.cs);
       const open = d.open.split(',').map(Number), start = Number(d.start), goal = Number(d.goal);

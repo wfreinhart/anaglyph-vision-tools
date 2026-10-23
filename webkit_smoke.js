@@ -829,9 +829,9 @@ async function closeSheet(page){
   /* which eye paints what, from the spec table, written out independently of the page */
   const WHO = (mode, X) => ({
     one:   { wall:X, wallY:null, piece:X, trail:X, sol:X },
-    trail: { wall:X, wallY:null, piece:X, trail:EYE[X], sol:X },
-    chars: { wall:X, wallY:null, piece:EYE[X], trail:EYE[X], sol:X },
-    split: { wall:X, wallY:EYE[X], piece:X, trail:X, sol:X }
+    trail: { wall:X, wallY:null, piece:X, trail:EYE[X], sol:null },
+    chars: { wall:X, wallY:null, piece:EYE[X], trail:EYE[X], sol:null },
+    split: { wall:X, wallY:EYE[X], piece:X, trail:X, sol:null }
   })[mode];
   async function setColours(page, mode){
     await openSheet(page);
@@ -1004,12 +1004,12 @@ async function closeSheet(page){
     await page.ctx.close();
   }
 
-  /* Show the way: offered in One colour and Trail in other colour, disabled with a reason in the other two */
+  /* Show the way: offered in One colour only; disabled with a reason in all three two-colour modes (trail: the other eye's trail would overpaint it, leaving white gaps) */
   console.log('\nshow the way by mode');
   for (const mode of MODES){
     const page = await openPage(browser, { game:{ eyePlan:'L', mazeN:3, mazeShow:true, mazeSlow:false } });
     if (mode !== 'one') await setColours(page, mode);
-    const way = mode === 'one' || mode === 'trail';
+    const way = mode === 'one';
     t(mode + ': the way is ' + (way ? 'drawn' : 'not drawn although saved on'), (await page.locator('.mzsol').count()) === (way ? 1 : 0));
     await openSheet(page);
     const st = await page.evaluate(() => ({ dis:document.getElementById('mazeShow').disabled, off:document.getElementById('mazeShowRow').classList.contains('off'),
@@ -1111,8 +1111,8 @@ async function closeSheet(page){
     const page = await openPage(browser, { game:{ eyePlan:'L', mazeN:n } });
     await setColours(page, 'split');
     await pixelAudit(page, CAL.std, 'split', 'L', 'split n=' + n + ' joins and border');
-    const meta = await page.evaluate(() => { const d = document.querySelector('svg.maze').dataset; return { fb:d.splitFallback, at:d.splitAttempts, c:d.splitCounts }; });
-    t('split n=' + n + ': the split is recorded on the maze (attempts ' + meta.at + ', false choices per eye ' + meta.c + ', fallback ' + meta.fb + ')', meta.fb === '0' || meta.fb === '1');
+    const meta = await page.evaluate(() => { const d = document.querySelector('svg.maze').dataset; return { fb:d.splitFallback, at:d.splitAttempts, tr:d.splitTries, c:d.splitCounts }; });
+    t('split n=' + n + ': the split is recorded on the maze (mazes ' + meta.tr + ', splits tried ' + meta.at + ', false branches per eye ' + meta.c + ', fallback ' + meta.fb + ')', (meta.fb === '0' || meta.fb === '1') && Number(meta.tr) >= 1 && Number(meta.at) >= 1);
     await page.ctx.close();
   }
 

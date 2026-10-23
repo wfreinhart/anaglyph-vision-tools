@@ -2263,12 +2263,14 @@
      Two-colour modes (experimental): delay: how far, in cells along its
      route, the other-colour trail stops behind its character (and how
      close, straight-line, it may come to either character). splitAttempts:
-     most random wall splits tried before the best found is used.
-     splitMin and splitScale: the false choices each eye alone must show,
-     max(splitMin, round(n * splitScale)). joinGap: the gap left where one
+     most random wall splits tried on one maze; mazeAttempts: most mazes tried
+     (each with a new derived seed) when none of them splits well, before the
+     best split found is used. splitMin and splitScale: the false branches
+     each eye alone must show on the true route, max(splitMin, round(n *
+     splitScale)), at least 1. joinGap: the gap left where one
      eye's wall meets the other's, as a multiple of the wall width. */
   const MAZE = { meet:0.5, step:0.5, sub:0.25, grab:0.8, hold:0.12, ahead:0.2,
-                 delay:1, splitAttempts:60, splitMin:2, splitScale:0.75, joinGap:0.6 };
+                 delay:1, splitAttempts:60, mazeAttempts:20, splitMin:1, splitScale:0.5, joinGap:0.6 };
   function mazeRng(seed){
     let a = seed >>> 0;
     return function(){
@@ -2488,16 +2490,18 @@
   function mazeEyes(eye, mode){
     const other = eye === 'L' ? 'R' : (eye === 'R' ? 'L' : 'both');
     if (eye === 'both') mode = 'one';
-    if (mode === 'trail') return { mode:'trail', wall:eye, wallY:null, piece:eye, trail:other, solution:eye };
+    if (mode === 'trail') return { mode:'trail', wall:eye, wallY:null, piece:eye, trail:other, solution:null };
     if (mode === 'chars') return { mode:'chars', wall:eye, wallY:null, piece:other, trail:other, solution:null };
     if (mode === 'split') return { mode:'split', wall:eye, wallY:other, piece:eye, trail:eye, solution:null };
     return { mode:'one', wall:eye, wallY:null, piece:eye, trail:eye, solution:eye };
   }
 
-  /* The way is not offered where it would give one eye the route (split
-     walls) or run under the other eye's characters (characters vs walls). */
+  /* The way is offered in One colour only: in split walls it would give one
+     eye the route, in characters vs walls it would run under the other eye's
+     characters, and in trail in other colour the other eye's trail would
+     overpaint it, leaving white gaps that mark that trail for the first eye. */
   function mazeAllowsWay(mode){
-    return mode !== 'split' && mode !== 'chars';
+    return mode === 'one';
   }
 
   /* Every colour the maze draws, from the ramp and nowhere else. The tones
@@ -2545,57 +2549,62 @@
   }
 
   /* How ambiguous each eye's own view is. assign[k] is 0 (X) or 1 (Y) for
-     segment k. Eye E sees only its own segments, so every inside wall it
-     cannot see reads as an opening. A false choice for E is a cell on or
-     next to the true route with a closed passage to a neighbour that E
-     cannot see closed AND that neighbour carries on (another way out in E's
-     view), so the false way looks like a real one that only the other eye's
-     wall shuts. Returns [choices for X alone, choices for Y alone], counted
-     as distinct junction cells. */
+     segment k. Eye E sees only its own segments, so every inside wall of the
+     other eye reads as an opening: E's monocular graph is the maze's real
+     passages plus those. A false branch for E is a cell u ON the true route
+     with a passage closed only by the other eye's wall, leading to a cell v
+     from which E can still reach a later route cell (the goal included)
+     without passing back through u. That is a usable alternative route in
+     E's view, not a dead end. Returns [cells with a false branch for X
+     alone, for Y alone]. */
   function mazeSplitScore(maze, segs, assign){
-    const n = maze.n, D = [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]];
-    const near = new Array(n * n).fill(false);
-    mazeSolve(maze).forEach(i => {
-      near[i] = true;
-      D.forEach(d => {
-        const c = i % n + d[0], r = Math.floor(i / n) + d[1];
-        if (c >= 0 && c < n && r >= 0 && r < n) near[r * n + c] = true;
-      });
-    });
-    const pair = (u, v) => Math.min(u, v) * n * n + Math.max(u, v);
+    const n = maze.n, N = n * n, D = [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]];
+    const route = mazeSolve(maze), at = new Array(N).fill(-1);
+    route.forEach((i, k) => { at[i] = k; });
     const out = [0, 0];
     for (let eye = 0; eye < 2; eye++){
       const hidden = new Set();
-      segs.forEach((s, k) => { if (s.b >= 0 && assign[k] !== eye) hidden.add(pair(s.a, s.b)); });
-      const ways = u => {
+      segs.forEach((s, k) => { if (s.b >= 0 && assign[k] !== eye) hidden.add(Math.min(s.a, s.b) * N + Math.max(s.a, s.b)); });
+      const ways = (u, skip) => {
         const list = [];
         D.forEach(d => {
           const c = u % n + d[0], r = Math.floor(u / n) + d[1];
           if (c < 0 || c >= n || r < 0 || r >= n) return;
           const v = r * n + c;
-          if ((maze.open[u] & d[2]) || hidden.has(pair(u, v))) list.push(v);
+          if (v !== skip && ((maze.open[u] & d[2]) || hidden.has(Math.min(u, v) * N + Math.max(u, v)))) list.push(v);
         });
         return list;
       };
-      for (let u = 0; u < n * n; u++){
-        if (!near[u]) continue;
+      /* From v, with u shut off, is a route cell later than u reachable? */
+      const rejoins = (v, u) => {
+        const seen = new Array(N).fill(false), stack = [v];
+        seen[v] = seen[u] = true;
+        while (stack.length){
+          const x = stack.pop();
+          if (at[x] > at[u]) return true;
+          ways(x, u).forEach(y => { if (!seen[y]){ seen[y] = true; stack.push(y); } });
+        }
+        return false;
+      };
+      route.forEach(u => {
         const false1 = D.some(d => {
           const c = u % n + d[0], r = Math.floor(u / n) + d[1];
           if (c < 0 || c >= n || r < 0 || r >= n || (maze.open[u] & d[2])) return false;
           const v = r * n + c;
-          return hidden.has(pair(u, v)) && ways(v).length >= 2;
+          return hidden.has(Math.min(u, v) * N + Math.max(u, v)) && rejoins(v, u);
         });
         if (false1) out[eye]++;
-      }
+      });
     }
     return out;
   }
 
   /* Splits every wall segment between the two eyes at random, keeping the
      first split in which BOTH eyes alone show at least `need` false
-     choices; after MAZE.splitAttempts tries the best split found is used
-     and fallback is true. The combined walls are always exactly the maze,
-     so the route is unique by construction. */
+     branches; after MAZE.splitAttempts tries on this maze the best found is
+     returned with fallback true (mazeNew then tries another maze). The
+     combined walls are always exactly the maze, so the route is unique by
+     construction. */
   function mazeSplit(maze, seed){
     const segs = mazeSegs(maze), need = Math.max(MAZE.splitMin, Math.round(maze.n * MAZE.splitScale));
     let best = null;
@@ -2607,7 +2616,27 @@
       if (!best || low > best.low || (low === best.low && counts[0] + counts[1] > best.sum))
         best = { assign:assign, counts:counts, low:low, sum:counts[0] + counts[1] };
     }
-    return { segs:segs, assign:best.assign, counts:best.counts, need:need, attempts:MAZE.splitAttempts, fallback:true };
+    return { segs:segs, assign:best.assign, counts:best.counts, low:best.low, need:need, attempts:MAZE.splitAttempts, fallback:true };
+  }
+
+  /* A maze and its split. The maze is made from `seed`; if no split of it
+     passes within MAZE.splitAttempts, a new maze is made from a derived seed,
+     at most MAZE.mazeAttempts mazes in all. Only if none passes is the best
+     failing split (most false branches for the weaker eye) used, with
+     fallback true. tries is the number of mazes made; attempts counts the
+     splits tried over all of them. */
+  function mazeWithSplit(n, seed){
+    let best = null, attempts = 0;
+    for (let k = 0; k < MAZE.mazeAttempts; k++){
+      const sd = k === 0 ? seed : (seed ^ Math.imul(k, 0x85EBCA6B)) >>> 0;
+      const maze = makeMaze(n, sd), split = mazeSplit(maze, sd);
+      attempts += split.attempts;
+      if (!split.fallback) return { maze:maze, seed:sd, split:Object.assign(split, { attempts:attempts, tries:k + 1 }) };
+      if (!best || split.low > best.split.low) best = { maze:maze, seed:sd, split:split };
+    }
+    best.split.attempts = attempts;
+    best.split.tries = MAZE.mazeAttempts;
+    return best;
   }
 
   /* The wall strokes of the two eyes, as two path strings in maze pixels
@@ -2683,13 +2712,15 @@
 
   function buildMaze(){
     const seed = (Math.random() * 4294967296) >>> 0;
-    const maze = makeMaze(state.mazeN, seed);
+    /* The maze is chosen together with a good split, whatever the colour
+       mode, so changing the mode mid-round never needs a new maze. */
+    const made = mazeWithSplit(state.mazeN, seed), maze = made.maze;
     const art = pickShapes(2, null).shapes;
     state.goal = art[1];
     /* Character 0 starts at maze.start, character 1 at maze.goal; each
        walker (and its trail) begins at its own corner. */
     mz = { maze:maze, walkers:[mazeWalker(maze.start), mazeWalker(maze.goal)], shapes:art, done:false,
-           solution:mazeSolve(maze), svg:null, cs:0, pad:0, ox:0, oy:0, seed:seed, split:null, colours:'one' };
+           solution:mazeSolve(maze), svg:null, cs:0, pad:0, ox:0, oy:0, seed:made.seed, split:made.split, colours:'one' };
     mazeDraw(true);
   }
 
@@ -2699,9 +2730,6 @@
     field.innerHTML = '';
     const m = mz.maze, n = m.n, eye = state.curEye, colours = mazeEyes(eye, mazeMode()).mode, ink = mazeInks(eye, colours);
     mz.colours = colours;
-    /* The split is made once per maze (not per redraw), so a resize or a
-       toggle keeps the same walls. */
-    if (colours === 'split' && !mz.split) mz.split = mazeSplit(m, mz.seed);
     const w = field.clientWidth, h = field.clientHeight, pad = 14;
     const top = HUD_CLEARANCE, bottom = h - bottomClear();
     const cs = Math.max(8, Math.floor(Math.min(w - 2 * pad, bottom - top) / n)), side = cs * n;
@@ -2781,7 +2809,8 @@
     svg.dataset.start = String(m.start);
     svg.dataset.goal = String(m.goal);
     svg.dataset.colours = colours;
-    if (mz.split){
+    if (colours === 'split'){
+      svg.dataset.splitTries = String(mz.split.tries);
       svg.dataset.splitFallback = mz.split.fallback ? '1' : '0';
       svg.dataset.splitAttempts = String(mz.split.attempts);
       svg.dataset.splitCounts = mz.split.counts.join(',');

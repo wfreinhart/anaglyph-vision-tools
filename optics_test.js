@@ -690,7 +690,7 @@ function mazeSuite(label, m, g){
   t('both characters take their colour from mazeInks, the same full ink', /makeThing\(mz\.shapes\[k\], ink\.piece,/.test(code) && !/ink\.(mover|goal)\b/.test(code));
   t('both trails are painted from one call with ink.trail', [...code.matchAll(/stroke\('mztrail', ink\.trail,/g)].length === 1 && /\[0, 1\]\.map\(\(\) => stroke\('mztrail'/.test(code));
   ['mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide',
-    'mazeEyes', 'mazeAllowsWay', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail'].forEach(name => {
+    'mazeEyes', 'mazeAllowsWay', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeWithSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail'].forEach(name => {
     const fnSrc = braceBlock(src, 'function ' + name + '(');
     t(name + ' touches no DOM and no state', !/\b(document|window|state|field|mz)\b/.test(fnSrc));
   });
@@ -719,7 +719,7 @@ function mazeSuite(label, m, g){
   /* The spec table, written out: [wall, wallY, piece, trail, solution] by X / Y. */
   const TABLE = {
     one:   X => [X, null, X, X, X],
-    trail: X => [X, null, X, oth(X), X],
+    trail: X => [X, null, X, oth(X), null],
     chars: X => [X, null, oth(X), oth(X), null],
     split: X => [X, oth(X), X, X, null]
   };
@@ -759,8 +759,8 @@ function mazeSuite(label, m, g){
   t('every two-colour maze colour keeps its eye\'s ghost ratio (measured cyan/magenta)', modeRatio);
   t('the Both plan makes every mode one colour', bothOne);
   t('a missing or unknown mode is one colour', m.mazeEyes('L').mode === 'one' && m.mazeEyes('L', 'rainbow').mode === 'one');
-  t('the way is offered in One colour and Trail in other colour only',
-    m.mazeAllowsWay('one') && m.mazeAllowsWay('trail') && !m.mazeAllowsWay('split') && !m.mazeAllowsWay('chars'));
+  t('the way is offered in One colour only (all three two-colour modes switch it off)',
+    m.mazeAllowsWay('one') && !m.mazeAllowsWay('trail') && !m.mazeAllowsWay('split') && !m.mazeAllowsWay('chars'));
   m.setState({ pair:'green', bluePass:0, red:'#ff0000', green:'#00ff00', redSide:'L', bg:'#ffffff', eyePlan:'both', mazeColours:'split' });
   t('mazeMode() is one colour under the Both plan whatever was chosen', m.mazeMode() === 'one');
   m.setState({ pair:'green', bluePass:0, red:'#ff0000', green:'#00ff00', redSide:'L', bg:'#ffffff', eyePlan:'alt', mazeColours:'split' });
@@ -769,32 +769,60 @@ function mazeSuite(label, m, g){
   console.log('  two-colour modes: split walls');
   {
     const SPLIT_SEEDS = 400, rows = [];
-    let partition = true, counted = true, honest = true, bothEyes = true, deterministic = true, capped = true, fallbackBest = true;
-    // an independent count of the criterion, written differently from mazeSplitScore
+    let partition = true, counted = true, honest = true, bothEyes = true, deterministic = true, capped = true, noFallback = true;
+    // an independent count of the criterion, written differently from mazeSplitScore: union-find over the
+    // monocular graph with the route cell u deleted; v rejoins ahead when its component holds a later route cell
     const indep = (mz, segs, assign) => {
-      const n = mz.n, route = m.mazeSolve(mz), near = new Set(route);
-      route.forEach(i => { const c = i % n, r = (i - c) / n;     // next to the route: any grid neighbour, wall or not
-        [[c, r - 1], [c + 1, r], [c, r + 1], [c - 1, r]].forEach(q => { if (q[0] >= 0 && q[0] < n && q[1] >= 0 && q[1] < n) near.add(q[1] * n + q[0]); }); });
-      const hidden = [new Set(), new Set()];
-      segs.forEach((sg, k) => { if (sg.b >= 0) hidden[1 - assign[k]].add(sg.a + ':' + sg.b).add(sg.b + ':' + sg.a); });
+      const n = mz.n, route = m.mazeSolve(mz), idx = {};
+      route.forEach((c, k) => { idx[c] = k; });
       const out = [0, 0];
-      for (let E = 0; E < 2; E++) near.forEach(u => {
-        const c = u % n, r = (u - c) / n;
-        const adj = [[c, r - 1], [c + 1, r], [c, r + 1], [c - 1, r]].filter(q => q[0] >= 0 && q[0] < n && q[1] >= 0 && q[1] < n).map(q => q[1] * n + q[0]);
-        const arcs = x => adj.length && (() => {
-          const cx = x % n, rx = (x - cx) / n;
-          return [[cx, rx - 1], [cx + 1, rx], [cx, rx + 1], [cx - 1, rx]].filter(q => q[0] >= 0 && q[0] < n && q[1] >= 0 && q[1] < n)
-            .map(q => q[1] * n + q[0]).filter(y => nb(mz, x).indexOf(y) >= 0 || hidden[E].has(x + ':' + y)).length;
-        })();
-        if (adj.some(v => nb(mz, u).indexOf(v) < 0 && hidden[E].has(u + ':' + v) && arcs(v) >= 2)) out[E]++;
-      });
+      for (let E = 0; E < 2; E++){
+        const hid = new Set();
+        segs.forEach((sg, k) => { if (sg.b >= 0 && assign[k] === 1 - E) hid.add(sg.a + ':' + sg.b).add(sg.b + ':' + sg.a); });
+        const edges = [];
+        for (let a = 0; a < n * n; a++) for (let b = a + 1; b < n * n; b++)
+          if (nb(mz, a).indexOf(b) >= 0 || hid.has(a + ':' + b)) edges.push([a, b]);
+        route.forEach(u => {
+          const par = [...Array(n * n).keys()], find = x => par[x] === x ? x : (par[x] = find(par[x]));
+          edges.forEach(([a, b]) => { if (a !== u && b !== u) par[find(a)] = find(b); });
+          const hit = edges.some(([a, b]) => {
+            const v = a === u ? b : (b === u ? a : -1);
+            if (v < 0 || nb(mz, u).indexOf(v) >= 0) return false;   // only a passage closed in the real maze, open only in E's view
+            return route.some(w => idx[w] > idx[u] && find(w) === find(v));
+          });
+          if (hit) out[E]++;
+        });
+      }
       return out;
     };
+    // hand-built cases: a 3x3 maze given by its open passages, a split given by the walls that go to Y
+    const hand = (edgesOpen, start, goal, toY) => {
+      const mz = { n:3, open:new Array(9).fill(0), start, goal };
+      edgesOpen.forEach(([a, b]) => { const d = b - a; const bit = d === 1 ? [2, 8] : (d === 3 ? [4, 1] : null); mz.open[a] |= bit[0]; mz.open[b] |= bit[1]; });
+      const segs = m.mazeSegs(mz), yset = new Set(toY.map(([a, b]) => a + ':' + b));
+      return { mz, segs, assign:segs.map(sg => sg.b >= 0 && yset.has(Math.min(sg.a, sg.b) + ':' + Math.max(sg.a, sg.b)) ? 1 : 0) };
+    };
+    // route 0-1-2 across the top, the rest hangs off cell 1: 1-4, 4-3, 4-5, 4-7, 7-6, 7-8
+    const tree = [[0, 1], [1, 2], [1, 4], [3, 4], [4, 5], [4, 7], [6, 7], [7, 8]];
+    {
+      const dead = hand(tree, 0, 2, [[2, 5]]);       // 2-5 hidden from X: from 5 only earlier route cells are reachable
+      t('hand-built: a false branch that leads only back to earlier route cells (a dead end ahead) does not count',
+        JSON.stringify(m.mazeSplitScore(dead.mz, dead.segs, dead.assign)) === '[0,1]' && JSON.stringify(indep(dead.mz, dead.segs, dead.assign)) === '[0,1]');
+      const back = hand(tree, 0, 2, [[0, 3]]);       // 0-3 hidden from X: 3 -> 4 -> 1 rejoins the route ahead of cell 0
+      t('hand-built: a false branch that rejoins the route ahead counts, for the eye that cannot see the wall',
+        JSON.stringify(m.mazeSplitScore(back.mz, back.segs, back.assign)) === '[1,0]' && JSON.stringify(indep(back.mz, back.segs, back.assign)) === '[1,0]');
+      const spiral = hand([[0, 1], [1, 2], [2, 5], [5, 8], [7, 8], [6, 7], [3, 6], [3, 4]], 0, 4, [[0, 3]]);
+      t('hand-built: a shortcut across a spiral to a later route cell counts once; the reverse view from cell 3 does not',
+        m.mazeSplitScore(spiral.mz, spiral.segs, spiral.assign)[0] === 1 && indep(spiral.mz, spiral.segs, spiral.assign).join() === m.mazeSplitScore(spiral.mz, spiral.segs, spiral.assign).join());
+      const none = hand(tree, 0, 2, []);
+      t('hand-built: with every wall visible to X there is no false branch for X', m.mazeSplitScore(none.mz, none.segs, none.assign)[0] === 0);
+    }
+    t('the criterion constants: one named floor of at least 1 branch per eye, and the attempt caps', m.MAZE.splitMin >= 1 && m.MAZE.splitAttempts > 0 && m.MAZE.mazeAttempts > 0);
     SIZES.forEach(n => {
-      let fallbacks = 0, attemptsSum = 0, worst = 0, minLow = 99;
+      let fallbacks = 0, attemptsSum = 0, worstAt = 0, regen = 0, triesSum = 0, worstTries = 0, minLow = 99;
+      const need = Math.max(m.MAZE.splitMin, Math.round(n * m.MAZE.splitScale));
       for (let seed = 0; seed < SPLIT_SEEDS; seed++){
-        const mz = m.makeMaze(n, (seed * 2654435761 + 17) % 4294967296), sp = m.mazeSplit(mz, seed * 7919 + n);
-        const need = Math.max(m.MAZE.splitMin, Math.round(n * m.MAZE.splitScale));
+        const s0 = (seed * 2654435761 + 17) % 4294967296, made = m.mazeWithSplit(n, s0), mz = made.maze, sp = made.split;
         if (sp.need !== need) honest = false;
         // the walls of both eyes together are exactly the maze: the outer square plus every closed passage, once each
         const keyOf = sg => [sg.x1, sg.y1, sg.x2, sg.y2].join(',');
@@ -808,39 +836,32 @@ function mazeSuite(label, m, g){
         }
         if (got !== want.map(q => q.join(',')).sort().join('|') || sp.segs.length !== 4 * n + (n - 1) * (n - 1)) partition = false;
         if (sp.assign.length !== sp.segs.length || !sp.assign.every(v => v === 0 || v === 1)) partition = false;
+        if (countRoutes(mz) !== 1) partition = false;
         // the border is part of the split, not a frame in one eye
         const rim = sp.segs.map((sg, k) => sg.b < 0 ? sp.assign[k] : -1).filter(v => v >= 0);
         if (n >= 4 && rim.indexOf(0) < 0 && rim.indexOf(1) < 0) bothEyes = false;
-        // the recorded counts are the criterion, and an accepted split meets it for BOTH eyes
+        // the recorded counts are the criterion, and an accepted split gives BOTH eyes at least `need`
         const ic = indep(mz, sp.segs, sp.assign);
-        if (ic.join() !== sp.counts.join()) counted = false;
-        if (!sp.fallback && Math.min(sp.counts[0], sp.counts[1]) < need) honest = false;
-        if (sp.fallback){
-          fallbacks++;
-          if (sp.attempts !== m.MAZE.splitAttempts) capped = false;
-          // a fallback really is the best of the capped tries: nothing in the same stream beats it
-          let bestLow = -1;
-          for (let at = 1; at <= m.MAZE.splitAttempts; at++){
-            const rnd = m.mazeRng((((seed * 7919 + n) ^ Math.imul(at, 0x9E3779B1)) >>> 0));
-            const a = sp.segs.map(() => rnd() < 0.5 ? 0 : 1), c = m.mazeSplitScore(mz, sp.segs, a);
-            bestLow = Math.max(bestLow, Math.min(c[0], c[1]));
-          }
-          if (Math.min(sp.counts[0], sp.counts[1]) !== bestLow || bestLow >= need) fallbackBest = false;
-        }
-        if (sp.attempts > m.MAZE.splitAttempts) capped = false;
-        attemptsSum += sp.attempts; worst = Math.max(worst, sp.attempts);
-        minLow = Math.min(minLow, Math.min(sp.counts[0], sp.counts[1]));
-        if (seed < 3 && JSON.stringify(m.mazeSplit(mz, seed * 7919 + n)) !== JSON.stringify(sp)) deterministic = false;
+        if (ic.join() !== sp.counts.join() || ic.join() !== m.mazeSplitScore(mz, sp.segs, sp.assign).join()) counted = false;
+        if (!sp.fallback && Math.min(ic[0], ic[1]) < need) honest = false;
+        if (sp.fallback){ fallbacks++; if (sp.tries !== m.MAZE.mazeAttempts || Math.min(ic[0], ic[1]) >= need) capped = false; }
+        if (sp.tries > m.MAZE.mazeAttempts || sp.attempts > m.MAZE.splitAttempts * m.MAZE.mazeAttempts) capped = false;
+        if (sp.tries > 1) regen++;
+        triesSum += sp.tries; worstTries = Math.max(worstTries, sp.tries);
+        attemptsSum += sp.attempts; worstAt = Math.max(worstAt, sp.attempts);
+        minLow = Math.min(minLow, Math.min(ic[0], ic[1]));
+        if (seed < 3 && JSON.stringify(m.mazeWithSplit(n, s0)) !== JSON.stringify(made)) deterministic = false;
       }
-      rows.push(n + 'x' + n + ' need ' + Math.max(m.MAZE.splitMin, Math.round(n * m.MAZE.splitScale)) + '/eye: fallback ' + fallbacks + '/' + SPLIT_SEEDS +
-                ', mean attempts ' + (attemptsSum / SPLIT_SEEDS).toFixed(2) + ', worst ' + worst);
-      t(n + 'x' + n + ': split falls back in at most 2% of ' + SPLIT_SEEDS + ' mazes (' + fallbacks + ')', fallbacks <= SPLIT_SEEDS * 0.02);
+      rows.push(n + 'x' + n + ' need ' + need + '/eye: fallback ' + fallbacks + '/' + SPLIT_SEEDS + ', maze regenerated ' + regen + '/' + SPLIT_SEEDS +
+                ' (worst ' + worstTries + ' mazes), mean split tries ' + (attemptsSum / SPLIT_SEEDS).toFixed(2) + ', worst ' + worstAt + ', min weaker-eye count ' + minLow);
+      if (fallbacks) noFallback = false;
+      t(n + 'x' + n + ': no maze of ' + SPLIT_SEEDS + ' ends in a failing split (' + fallbacks + ' fallbacks)', fallbacks === 0);
     });
     rows.forEach(r => console.log('    ' + r));
     t('the split walls of both eyes union to exactly the maze (outer square + every closed passage), every size and seed', partition);
     t('the border is split between the eyes, not a frame in one eye', bothEyes);
-    t('the recorded false-choice counts match an independent count; an accepted split gives both eyes >= need', counted && honest);
-    t('the attempt cap is MAZE.splitAttempts, and a fallback is the best split in that capped stream', capped && fallbackBest);
+    t('the recorded false-branch counts match an independent re-count; an accepted split gives both eyes >= need', counted && honest);
+    t('both attempt caps hold, and a fallback happens only after MAZE.mazeAttempts mazes all failed', capped);
     t('the same maze and seed give the same split', deterministic);
 
     // No mixed joins: the strokes of opposite eyes never touch, at any size
@@ -948,7 +969,8 @@ function mazeSuite(label, m, g){
     t('the Show the way switch is really disabled where the way is not offered', /\$\('mazeShow'\)\.disabled = !way;/.test(src));
     t('the Colours chips are really disabled under the Both plan', /b\.disabled = noOther;/.test(src));
     t('the trail is cut only in Trail in other colour', /if \(mz\.colours === 'trail'\) pts = mazeCutTrail\(/.test(code));
-    t('the split is made once per maze, not on every redraw', /if \(colours === 'split' && !mz\.split\) mz\.split = mazeSplit\(m, mz\.seed\);/.test(code));
+    t('the maze and its split are made together once, not on every redraw',
+      /const made = mazeWithSplit\(state\.mazeN, seed\)/.test(code) && /split:made\.split/.test(code) && !/mazeSplit\(/.test(braceBlock(src, 'function mazeDraw(')));
   }
 }
 
@@ -960,7 +982,7 @@ meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 toneArtSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 guardSuite('puzzle.html', guardsFrom('puzzle.html'), modelFrom('puzzle.html'));
-mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide', 'mazeEyes', 'mazeAllowsWay', 'mazeMode', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail']),
+mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide', 'mazeEyes', 'mazeAllowsWay', 'mazeMode', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeWithSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail']),
           guardsFrom('puzzle.html'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
