@@ -1,26 +1,20 @@
 # CONTEXT — eyetrainer pair
 
 ## Current Task
-Maze mode in puzzle.html (relayed task 2026-10-22, spec docs/maze.md) — built, tested on the Air, committed; waiting on Wes's iPad check and his answer on what "colors" means.
+Maze mode for Leo (relayed task 2026-10-22 + Wes's follow-ups) — done and live on Pages (3000372, wfreinhart.github.io/anaglyph-vision-tools/puzzle.html#maze); awaiting Wes's iPad playtest.
 
 ## Key Decisions
-(full record in INTENT.md)
-- Everything in a maze (walls, mover, goal, trail, solution) is in the round's eye via `mazeInks(eye)` (inkFor/rampInk only). "Colors" = same-eye looks (trail line/light/dots, wall full/medium) — my interpretation, unconfirmed with Wes. Other-eye trail not built (doesn't force fusion).
-- Either character can be dragged; solved when the two trails join (Wes 2026-10-22, verbatim in INTENT.md).
-- Maze wins tick the HUD tally but are counted apart from right/wrong (`state.mazeWins`) and are not written to the per-eye ms log (support). Per-eye maze log = backlog.
-- Earlier character-art decisions: see INTENT.md / git log (toned .t1/.t2 art, packs, `#pop`).
+(full record with Wes's verbatim words in INTENT.md; specs docs/maze.md, maze-duo.md, maze-star.md)
+- Default maze is one eye's ink (mazeInks); continuous rail movement; either character drags, win when they meet (corridor gap ≤ 0.5).
+- Two-colour modes (trail / split walls / characters vs walls) experimental, reset to One colour each load, Show the way off in them; doctor note docs/training-mechanism.md §7.
+- Mario power-up star: same-eye shimmer + original jingle; rainbow only after a win.
 
-**State:** maze pushed to GitHub Pages 2026-10-23 (Wes: "Can you get the maze deployed to the gh IO page"; e15c3d1 live at wfreinhart.github.io/anaglyph-vision-tools/puzzle.html#maze). The jigsaw `.cellrim` full-ink slot outline (2026-10-14) is parked as docs/pending-cellrim.patch (untracked; `git apply` it) so the iPad demo serves only committed code — passes optics_test/verify on the Air, no browser check yet.
-**Tests (Air only):** rsync puzzle.html eye-trainer.html optics_test.js verify.py index.html webkit_smoke.js maze_realdrag.js to air:tmp/rgtest; `node optics_test.js`, `python3 verify.py`, `node webkit_smoke.js`, `node maze_realdrag.js`. Playwright 1.61.0 installed in ~/tmp/rgtest on the Air (matches cached webkit-2311). 2026-10-22: 179/0, PASS, 120/0, real-input drags OK — all emulated.
-
-**Open threads**
-- Wes: what "different colors" means (same-eye looks vs other-eye trail); iPad calibration + cover-one-eye on the maze; answered by drag-either; 8×8 and medium-wall visibility.
-- Older card c-1fce19 (Pop "doesn't use both eyes", 30% tone visibility, custom packs) still unanswered.
-- Backlog: per-eye maze log; stats line says "No taps yet today" if only mazes were played.
+**State:** all pushed (Wes 2026-10-23: "just get it deployed it gh.io asap and close out"). Parked, untracked: docs/pending-cellrim.patch (jigsaw slot outline, no browser check) and docs/pending-ratio-checks.patch (unfinished test-only fix, see below).
+**Tests (Air only):** rsync puzzle.html eye-trainer.html optics_test.js verify.py index.html webkit_smoke.js maze_realdrag.js to air:tmp/rgtest; node optics_test.js (325/0), python3 verify.py, node webkit_smoke.js (559/0), node maze_realdrag.js. Playwright 1.61.0 in ~/tmp/rgtest. All emulated.
 
 ## Next Steps
-- Hand the maze to Wes; act on his iPad check and colour answer.
-- Browser-check and commit (or drop) the jigsaw `.cellrim` change.
+- Wes: iPad calibration + cover-each-eye per mode (and with star power); Leo's 3×3 playtest; 8×8 / medium-wall visibility.
+- Finish the ratio-check fix (support 2026-10-23): some older ghost-ratio loops compare non-finite ratios and never fire — require finite values, count valid cases; partial attempt in docs/pending-ratio-checks.patch, untested.
+- Old card c-1fce19 (Pop questions) still unanswered; per-eye maze log is backlog.
 
-Last saved: 2026-10-22.
-- 2026-10-22 Wes: "consider ways to makw both eyes work at once" — proposed (not built): split-wall "Two-eye maze (experimental)" switch, off by default, each eye's view checked to be ambiguous alone; framed as a two-eye information task, not fusion; doctor review because of exotropia misalignment. Awaiting his yes/no.
+Last saved: 2026-10-23.
