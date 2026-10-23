@@ -685,11 +685,12 @@ function mazeSuite(label, m, g){
   t('no colour literal in the maze code', !/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(code));
   t('no opacity, filter, shadow, blend or mask in the maze code',
     !/opacity|style\.filter|filter:|shadow|blend|mask|backdrop/i.test(code));
-  t('every svg paint is an ink from mazeInks', [...code.matchAll(/stroke\('[a-z]+', ([^,]+),/g)].every(x => /^ink\.[a-z]+$/.test(x[1])) &&
-    [...code.matchAll(/stroke\('[a-z]+', /g)].length === 3);
+  t('every svg paint is an ink from mazeInks', [...code.matchAll(/stroke\('[a-z]+', ([^,]+),/g)].every(x => /^ink\.[a-zA-Z]+$/.test(x[1])) &&
+    [...code.matchAll(/stroke\('[a-z]+', /g)].length === 5);   // wall (one colour), wall x2 (split), the way, the trails
   t('both characters take their colour from mazeInks, the same full ink', /makeThing\(mz\.shapes\[k\], ink\.piece,/.test(code) && !/ink\.(mover|goal)\b/.test(code));
   t('both trails are painted from one call with ink.trail', [...code.matchAll(/stroke\('mztrail', ink\.trail,/g)].length === 1 && /\[0, 1\]\.map\(\(\) => stroke\('mztrail'/.test(code));
-  ['mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide'].forEach(name => {
+  ['mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide',
+    'mazeEyes', 'mazeAllowsWay', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail'].forEach(name => {
     const fnSrc = braceBlock(src, 'function ' + name + '(');
     t(name + ' touches no DOM and no state', !/\b(document|window|state|field|mz)\b/.test(fnSrc));
   });
@@ -710,6 +711,245 @@ function mazeSuite(label, m, g){
   ].forEach(([k, v]) => t('  ' + k + ' = ' + JSON.stringify(v) + ' is refused', !(k in gs({ [k]: v }))));
   t('#maze sets the mode and nothing else',
     /if \(location\.hash === '#maze'\)\{ state\.mode = 'maze'; return true; \}/.test(src));
+
+  /* ===== two-colour modes (docs/maze-duo.md) ===== */
+  console.log('  two-colour modes: eye assignment');
+  const MODES = ['one', 'trail', 'split', 'chars'];
+  const oth = e => e === 'L' ? 'R' : (e === 'R' ? 'L' : 'both');
+  /* The spec table, written out: [wall, wallY, piece, trail, solution] by X / Y. */
+  const TABLE = {
+    one:   X => [X, null, X, X, X],
+    trail: X => [X, null, X, oth(X), X],
+    chars: X => [X, null, oth(X), oth(X), null],
+    split: X => [X, oth(X), X, X, null]
+  };
+  let eyesOk = true, modeOnRamp = true, modeRatio = true, nModeCol = 0, bothOne = true;
+  states.forEach((base, si) => MODES.forEach(mode => ['line', 'light', 'dots'].forEach(trail => ['full', 'medium'].forEach(wall => ['L', 'R'].forEach(X => {
+    m.setBg('#ffffff');
+    m.setState(Object.assign({}, base, { mazeTrail:trail, mazeWall:wall }));
+    const e = m.mazeEyes(X, mode), want = TABLE[mode](X), ink = m.mazeInks(X, mode);
+    if ([e.wall, e.wallY, e.piece, e.trail, e.solution].join('|') !== want.join('|')) eyesOk = false;
+    const tone = (eye, light) => light ? m.rampInk(eye, 0.6) : m.inkFor(eye);
+    if (ink.wall !== tone(want[0], wall === 'medium')) modeOnRamp = false;
+    if (mode === 'split' ? ink.wallY !== tone(want[1], wall === 'medium') : 'wallY' in ink) modeOnRamp = false;
+    if (ink.piece !== m.inkFor(want[2])) modeOnRamp = false;
+    if (ink.trail !== tone(want[3], trail === 'light')) modeOnRamp = false;
+    if (ink.solution !== m.rampInk(want[4] || X, 0.45)) modeOnRamp = false;
+    Object.keys(ink).forEach(k => {
+      nModeCol++;
+      if (!/^#[0-9a-f]{6}$/.test(ink[k])) modeOnRamp = false;
+      if (si === 1){
+        // every colour is some eye's ink on that eye's ramp, so it keeps that ink's ghost ratio
+        const eyeOf = [X, oth(X)].find(q => [m.inkFor(q), m.rampInk(q, 0.6), m.rampInk(q, 0.45)].indexOf(ink[k]) >= 0);
+        if (!eyeOf) modeOnRamp = false;
+        else {
+          const full = m.visible('cyan', m.inkFor(eyeOf)) / m.visible('red', m.inkFor(eyeOf));
+          if (Math.abs(m.visible('cyan', ink[k]) / m.visible('red', ink[k]) - full) > 0.002) modeRatio = false;
+        }
+      }
+    });
+    // the Both plan has no other eye: every mode is one colour
+    const eb = m.mazeEyes('both', mode);
+    const ib = m.mazeInks('both', mode);
+    if (eb.mode !== 'one' || [m.inkFor('both'), m.rampInk('both', 0.6)].indexOf(ib.wall) < 0 || 'wallY' in ib ||
+        [ib.piece, ib.trail].some(c => [m.inkFor('both'), m.rampInk('both', 0.6)].indexOf(c) < 0)) bothOne = false;
+  })))));
+  t('the eye table of docs/maze-duo.md holds for every mode, eye, look and tone', eyesOk);
+  t('all ' + nModeCol + ' two-colour maze colours are inkFor/rampInk of the eye the table gives them', modeOnRamp);
+  t('every two-colour maze colour keeps its eye\'s ghost ratio (measured cyan/magenta)', modeRatio);
+  t('the Both plan makes every mode one colour', bothOne);
+  t('a missing or unknown mode is one colour', m.mazeEyes('L').mode === 'one' && m.mazeEyes('L', 'rainbow').mode === 'one');
+  t('the way is offered in One colour and Trail in other colour only',
+    m.mazeAllowsWay('one') && m.mazeAllowsWay('trail') && !m.mazeAllowsWay('split') && !m.mazeAllowsWay('chars'));
+  m.setState({ pair:'green', bluePass:0, red:'#ff0000', green:'#00ff00', redSide:'L', bg:'#ffffff', eyePlan:'both', mazeColours:'split' });
+  t('mazeMode() is one colour under the Both plan whatever was chosen', m.mazeMode() === 'one');
+  m.setState({ pair:'green', bluePass:0, red:'#ff0000', green:'#00ff00', redSide:'L', bg:'#ffffff', eyePlan:'alt', mazeColours:'split' });
+  t('mazeMode() is the chosen mode under one-eye plans', m.mazeMode() === 'split');
+
+  console.log('  two-colour modes: split walls');
+  {
+    const SPLIT_SEEDS = 400, rows = [];
+    let partition = true, counted = true, honest = true, bothEyes = true, deterministic = true, capped = true, fallbackBest = true;
+    // an independent count of the criterion, written differently from mazeSplitScore
+    const indep = (mz, segs, assign) => {
+      const n = mz.n, route = m.mazeSolve(mz), near = new Set(route);
+      route.forEach(i => { const c = i % n, r = (i - c) / n;     // next to the route: any grid neighbour, wall or not
+        [[c, r - 1], [c + 1, r], [c, r + 1], [c - 1, r]].forEach(q => { if (q[0] >= 0 && q[0] < n && q[1] >= 0 && q[1] < n) near.add(q[1] * n + q[0]); }); });
+      const hidden = [new Set(), new Set()];
+      segs.forEach((sg, k) => { if (sg.b >= 0) hidden[1 - assign[k]].add(sg.a + ':' + sg.b).add(sg.b + ':' + sg.a); });
+      const out = [0, 0];
+      for (let E = 0; E < 2; E++) near.forEach(u => {
+        const c = u % n, r = (u - c) / n;
+        const adj = [[c, r - 1], [c + 1, r], [c, r + 1], [c - 1, r]].filter(q => q[0] >= 0 && q[0] < n && q[1] >= 0 && q[1] < n).map(q => q[1] * n + q[0]);
+        const arcs = x => adj.length && (() => {
+          const cx = x % n, rx = (x - cx) / n;
+          return [[cx, rx - 1], [cx + 1, rx], [cx, rx + 1], [cx - 1, rx]].filter(q => q[0] >= 0 && q[0] < n && q[1] >= 0 && q[1] < n)
+            .map(q => q[1] * n + q[0]).filter(y => nb(mz, x).indexOf(y) >= 0 || hidden[E].has(x + ':' + y)).length;
+        })();
+        if (adj.some(v => nb(mz, u).indexOf(v) < 0 && hidden[E].has(u + ':' + v) && arcs(v) >= 2)) out[E]++;
+      });
+      return out;
+    };
+    SIZES.forEach(n => {
+      let fallbacks = 0, attemptsSum = 0, worst = 0, minLow = 99;
+      for (let seed = 0; seed < SPLIT_SEEDS; seed++){
+        const mz = m.makeMaze(n, (seed * 2654435761 + 17) % 4294967296), sp = m.mazeSplit(mz, seed * 7919 + n);
+        const need = Math.max(m.MAZE.splitMin, Math.round(n * m.MAZE.splitScale));
+        if (sp.need !== need) honest = false;
+        // the walls of both eyes together are exactly the maze: the outer square plus every closed passage, once each
+        const keyOf = sg => [sg.x1, sg.y1, sg.x2, sg.y2].join(',');
+        const got = sp.segs.map(keyOf).sort().join('|');
+        const want = [];
+        for (let k = 0; k < n; k++) want.push([k, 0, k + 1, 0], [k, n, k + 1, n], [0, k, 0, k + 1], [n, k, n, k + 1]);
+        for (let r = 0; r < n; r++) for (let c = 0; c < n; c++){
+          const i = r * n + c;
+          if (c < n - 1 && nb(mz, i).indexOf(i + 1) < 0) want.push([c + 1, r, c + 1, r + 1]);
+          if (r < n - 1 && nb(mz, i).indexOf(i + n) < 0) want.push([c, r + 1, c + 1, r + 1]);
+        }
+        if (got !== want.map(q => q.join(',')).sort().join('|') || sp.segs.length !== 4 * n + (n - 1) * (n - 1)) partition = false;
+        if (sp.assign.length !== sp.segs.length || !sp.assign.every(v => v === 0 || v === 1)) partition = false;
+        // the border is part of the split, not a frame in one eye
+        const rim = sp.segs.map((sg, k) => sg.b < 0 ? sp.assign[k] : -1).filter(v => v >= 0);
+        if (n >= 4 && rim.indexOf(0) < 0 && rim.indexOf(1) < 0) bothEyes = false;
+        // the recorded counts are the criterion, and an accepted split meets it for BOTH eyes
+        const ic = indep(mz, sp.segs, sp.assign);
+        if (ic.join() !== sp.counts.join()) counted = false;
+        if (!sp.fallback && Math.min(sp.counts[0], sp.counts[1]) < need) honest = false;
+        if (sp.fallback){
+          fallbacks++;
+          if (sp.attempts !== m.MAZE.splitAttempts) capped = false;
+          // a fallback really is the best of the capped tries: nothing in the same stream beats it
+          let bestLow = -1;
+          for (let at = 1; at <= m.MAZE.splitAttempts; at++){
+            const rnd = m.mazeRng((((seed * 7919 + n) ^ Math.imul(at, 0x9E3779B1)) >>> 0));
+            const a = sp.segs.map(() => rnd() < 0.5 ? 0 : 1), c = m.mazeSplitScore(mz, sp.segs, a);
+            bestLow = Math.max(bestLow, Math.min(c[0], c[1]));
+          }
+          if (Math.min(sp.counts[0], sp.counts[1]) !== bestLow || bestLow >= need) fallbackBest = false;
+        }
+        if (sp.attempts > m.MAZE.splitAttempts) capped = false;
+        attemptsSum += sp.attempts; worst = Math.max(worst, sp.attempts);
+        minLow = Math.min(minLow, Math.min(sp.counts[0], sp.counts[1]));
+        if (seed < 3 && JSON.stringify(m.mazeSplit(mz, seed * 7919 + n)) !== JSON.stringify(sp)) deterministic = false;
+      }
+      rows.push(n + 'x' + n + ' need ' + Math.max(m.MAZE.splitMin, Math.round(n * m.MAZE.splitScale)) + '/eye: fallback ' + fallbacks + '/' + SPLIT_SEEDS +
+                ', mean attempts ' + (attemptsSum / SPLIT_SEEDS).toFixed(2) + ', worst ' + worst);
+      t(n + 'x' + n + ': split falls back in at most 2% of ' + SPLIT_SEEDS + ' mazes (' + fallbacks + ')', fallbacks <= SPLIT_SEEDS * 0.02);
+    });
+    rows.forEach(r => console.log('    ' + r));
+    t('the split walls of both eyes union to exactly the maze (outer square + every closed passage), every size and seed', partition);
+    t('the border is split between the eyes, not a frame in one eye', bothEyes);
+    t('the recorded false-choice counts match an independent count; an accepted split gives both eyes >= need', counted && honest);
+    t('the attempt cap is MAZE.splitAttempts, and a fallback is the best split in that capped stream', capped && fallbackBest);
+    t('the same maze and seed give the same split', deterministic);
+
+    // No mixed joins: the strokes of opposite eyes never touch, at any size
+    let gapMin = Infinity, joinsOk = true, flush = true;
+    const rectsOf = (d, ww) => [...d.matchAll(/M(-?[\d.]+) (-?[\d.]+)L(-?[\d.]+) (-?[\d.]+)/g)].map(q => {
+      const [x1, y1, x2, y2] = q.slice(1).map(Number);
+      return { x0:Math.min(x1, x2) - (y1 === y2 ? 0 : ww / 2), x1:Math.max(x1, x2) + (y1 === y2 ? 0 : ww / 2),
+               y0:Math.min(y1, y2) - (x1 === x2 ? 0 : ww / 2), y1:Math.max(y1, y2) + (x1 === x2 ? 0 : ww / 2) };
+    });
+    const dist = (a, b) => Math.hypot(Math.max(0, a.x0 - b.x1, b.x0 - a.x1), Math.max(0, a.y0 - b.y1, b.y0 - a.y1));
+    [[3, 90], [4, 80], [6, 60], [8, 90], [8, 50]].forEach(([n, cs]) => {
+      const ww = Math.max(4, Math.round(cs * 0.1));
+      for (let seed = 0; seed < 25; seed++){
+        const mz = m.makeMaze(n, seed + 1), sp = m.mazeSplit(mz, seed);
+        const pa = m.mazeSplitPaths(sp.segs, sp.assign, cs, ww, ww * m.MAZE.joinGap);
+        const A = rectsOf(pa[0], ww), B = rectsOf(pa[1], ww);
+        if (A.length + B.length !== sp.segs.length) joinsOk = false;
+        A.forEach(a => B.forEach(b => { const dd = dist(a, b); gapMin = Math.min(gapMin, dd); if (dd <= 0) joinsOk = false; }));
+        // the strokes of both eyes together still span exactly the outer wall's extent
+        const all = A.concat(B), minX = Math.min(...all.map(r => r.x0)), maxX = Math.max(...all.map(r => r.x1));
+        const minY = Math.min(...all.map(r => r.y0)), maxY = Math.max(...all.map(r => r.y1));
+        if (Math.abs(minX + ww / 2) > 1e-6 || Math.abs(minY + ww / 2) > 1e-6 ||
+            Math.abs(maxX - n * cs - ww / 2) > 1e-6 || Math.abs(maxY - n * cs - ww / 2) > 1e-6) flush = false;
+      }
+    });
+    t('opposite-eye wall strokes never touch (smallest gap ' + gapMin.toFixed(2) + 'px at the sizes tried)', joinsOk && gapMin >= 0.6 * 4 * 0.99);
+    t('the split leaves the outer extent of the maze unchanged', flush);
+    // a corner joining one eye's walls only is flush, one joining both eyes' is open
+    const seg = (x1, y1, x2, y2, a) => ({ x1, y1, x2, y2, a, b:-1 });
+    const solo = m.mazeSplitPaths([seg(0, 0, 1, 0, 0), seg(0, 0, 0, 1, 0)], [0, 0], 100, 10, 6);
+    t('a corner of one eye\'s walls reaches ww/2 past the corner (flush, as a square cap)', /M-5 0L105 0/.test(solo[0]) && /M0 -5L0 105/.test(solo[0]) && solo[1] === '');
+    const mixed = m.mazeSplitPaths([seg(0, 0, 1, 0, 0), seg(0, 0, 0, 1, 0)], [0, 1], 100, 10, 6);
+    t('a corner between the eyes is pulled back ww/2 + gap from the corner for both', /M11 0L105 0/.test(mixed[0]) && /M0 11L0 105/.test(mixed[1]));
+  }
+
+  console.log('  two-colour modes: trail in other colour');
+  {
+    let neverNear = true, shortOfTip = true, prefix = true, nSamples = 0, visibleSome = false, hidIfShort = true;
+    const EPS2 = 1e-6;
+    const polyLen = pts => { let L = 0; for (let k = 1; k < pts.length; k++) L += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y); return L; };
+    const near = (pts, q) => {             // closest approach of a polyline to a point
+      let best = Infinity;
+      for (let k = 1; k < pts.length; k++){
+        const a = pts[k - 1], b = pts[k], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+        const u = l2 ? Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / l2)) : 0;
+        best = Math.min(best, Math.hypot(a.x + dx * u - q.x, a.y + dy * u - q.y));
+      }
+      return best;
+    };
+    SIZES.forEach(n => {
+      for (let seed = 0; seed < 40; seed++){
+        const mz = m.makeMaze(n, seed * 31 + 5), W = [m.mazeWalker(mz.start), m.mazeWalker(mz.goal)];
+        const rnd = m.mazeRng(seed + 99);
+        for (let step = 0; step < 220; step++){
+          const k = rnd() < 0.5 ? 0 : 1, w = W[k], at = m.mazePoint(mz, w);
+          // a finger that drifts about the maze, sometimes far from the character
+          const to = rnd() < 0.2 ? { x:rnd() * n, y:rnd() * n } : { x:at.x + (rnd() - 0.5) * 1.6, y:at.y + (rnd() - 0.5) * 1.6 };
+          m.mazeSlide(mz, w, { x:at.x, y:at.y }, to, 1, W[1 - k], null, rnd() < 0.3);
+          const chars = W.map(q => m.mazePoint(mz, q));
+          W.forEach((q, j) => {
+            const pts = m.mazeWalkerPts(mz, q), cut = m.mazeCutTrail(pts, chars, m.MAZE.delay);
+            nSamples++;
+            if (cut.length){
+              visibleSome = true;
+              chars.forEach(c => { if (near(cut, c) < m.MAZE.delay - EPS2) neverNear = false; });
+              if (polyLen(cut) > polyLen(pts) - m.MAZE.delay + EPS2) shortOfTip = false;
+              // it is a prefix of his route: same points, then a cut final point on the last segment
+              for (let i = 0; i < cut.length - 1; i++) if (Math.hypot(cut[i].x - pts[i].x, cut[i].y - pts[i].y) > EPS2) prefix = false;
+            }
+            if (polyLen(pts) <= m.MAZE.delay + EPS2 && cut.length) hidIfShort = false;
+          });
+        }
+      }
+    });
+    t('the other-colour trail never comes within one cell of either character (' + nSamples + ' walker states, every size)', neverNear && visibleSome);
+    t('it stops at least one cell (along the route) behind its character', shortOfTip);
+    t('what is drawn is the start of his route, not a different line', prefix);
+    t('a trail no longer than one cell is not drawn at all', hidIfShort);
+    const straight = [{ x:0.5, y:0.5 }, { x:1.5, y:0.5 }, { x:2.5, y:0.5 }, { x:3.5, y:0.5 }];
+    const far = [{ x:9, y:9 }];
+    const c1 = m.mazeCutTrail(straight, far, 1);
+    t('a straight trail of three cells is drawn for two', Math.abs(polyLen(c1) - 2) < 1e-9 && c1[0].x === 0.5);
+    const c2 = m.mazeCutTrail(straight, [{ x:2.5, y:0.5 }], 1);
+    t('the other character standing on the trail cuts it a cell before that point', Math.abs(polyLen(c2) - 1) < 1e-9);
+    t('a rest cell has no trail', m.mazeCutTrail([{ x:0.5, y:0.5 }], far, 1).length === 0);
+  }
+
+  console.log('  two-colour modes: choice is never stored');
+  {
+    ['one', 'trail', 'split', 'chars', 'rainbow', 7, null].forEach(v => t('mazeColours = ' + JSON.stringify(v) + ' is dropped by sanitize', !('mazeColours' in gs({ mazeColours:v }))));
+    t('sanitize keeps the other maze settings and drops mazeColours from the same record',
+      JSON.stringify(gs(Object.assign({}, goodMaze, { mazeColours:'split' }))) === JSON.stringify(goodMaze));
+    const sc = src.slice(src.indexOf('const SCHEMA = {'), src.indexOf('let dropped = 0;'));
+    t('mazeColours is not in SCHEMA', !/mazeColours/.test(sc));
+    const pers = braceBlock(src, 'function persist(');
+    t('persist() never writes mazeColours', !/mazeColours/.test(pers));
+    t('mazeColours starts as one colour', /mazeColours:'one'/.test(src.slice(src.indexOf('const state = Object.assign('), src.indexOf('}, sanitize(store.get(CALIB_KEY'))));
+    t('entering Maze from another mode resets it to one colour',
+      /const was = state\.mode;\s*state\.mode = btn\.dataset\.mode;\s*if \(state\.mode === 'maze' && was !== 'maze'\) state\.mazeColours = 'one';/.test(src));
+    t('the #maze link entered from another mode resets it too',
+      /const was = state\.mode;\s*if \(demoHash\(\)\)\{\s*if \(state\.mode === 'maze' && was !== 'maze'\) state\.mazeColours = 'one';/.test(src));
+    t('choosing the Both plan drops the choice for good', /if \(state\.eyePlan === 'both'\) state\.mazeColours = 'one';/.test(src));
+    t('the Colours chooser is wired and never persisted separately', /group\('mazeColoursChips', btn => \{ state\.mazeColours = btn\.dataset\.colours; \}\);/.test(src));
+    t('the way is drawn only where mazeAllowsWay says so', /if \(state\.mazeShow && mazeAllowsWay\(colours\)\)/.test(code));
+    t('the Show the way switch is really disabled where the way is not offered', /\$\('mazeShow'\)\.disabled = !way;/.test(src));
+    t('the Colours chips are really disabled under the Both plan', /b\.disabled = noOther;/.test(src));
+    t('the trail is cut only in Trail in other colour', /if \(mz\.colours === 'trail'\) pts = mazeCutTrail\(/.test(code));
+    t('the split is made once per maze, not on every redraw', /if \(colours === 'split' && !mz\.split\) mz\.split = mazeSplit\(m, mz\.seed\);/.test(code));
+  }
 }
 
 suite('reference model', reference());
@@ -720,7 +960,7 @@ meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 toneArtSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 guardSuite('puzzle.html', guardsFrom('puzzle.html'), modelFrom('puzzle.html'));
-mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide']),
+mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide', 'mazeEyes', 'mazeAllowsWay', 'mazeMode', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail']),
           guardsFrom('puzzle.html'));
 
 console.log(`\n${pass} passed, ${fail} failed`);

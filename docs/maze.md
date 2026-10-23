@@ -107,6 +107,7 @@ vs draggable". This replaces the first spec's fixed mover and goal.
    traces without coaching, and drags either character without asking which one moves.
 
 ## Not built (needs Wes / separate design)
-- Trail or solution in the OTHER eye (dichoptic). It does not make fusion necessary (one eye can
+- Trail or solution in the OTHER eye (dichoptic): the experimental two-colour modes now do put the trail in the other eye (docs/maze-duo.md); the way (solution) never leaves the round's eye.
+- (Original note:) Trail or solution in the OTHER eye (dichoptic). It does not make fusion necessary (one eye can
   still solve the maze from walls + both characters), so it is not a "Both eyes needed" variant.
 - Real colour choice beyond the two calibrated inks and their tones.

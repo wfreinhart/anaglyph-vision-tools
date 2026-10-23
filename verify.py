@@ -24,7 +24,7 @@ TARGETS = {
         'needs': ('field', 'modeChips', 'eyeChips', 'pairChips', 'blueRange', 'redRange',
                   'gear', 'statLine', 'picChips', 'toneChips', 'picGallery', 'contrastRange',
                   'dockPieces', 'dockFusion', 'dockShapes', 'holesMove', 'packChips', 'sceneGallery',
-                  'rowClears', 'mazeSizeChips', 'mazeTrailChips', 'mazeWallChips', 'mazeShow', 'mazeSlow'),
+                  'rowClears', 'mazeSizeChips', 'mazeTrailChips', 'mazeWallChips', 'mazeShow', 'mazeSlow', 'mazeColoursChips', 'mazeColoursRow', 'mazeColoursNote', 'mazeShowSub'),
         'storage': 'store',
     },
 }

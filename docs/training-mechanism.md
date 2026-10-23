@@ -1,6 +1,6 @@
 # Training mechanism — proposals for Wes and the doctor
 
-The optics model, the measured inks, and the clinical defaults (white field, strict L/R alternation, fusion off) are unchanged. Everything below that would change *what the eyes are asked to do* is a proposal for the doctor. Only item 1 is built, and it only logs.
+The optics model, the measured inks, and the clinical defaults (white field, strict L/R alternation, fusion off) are unchanged. Everything below that would change *what the eyes are asked to do* is a proposal for the doctor. Only item 1 is built, and it only logs; item 7 (two-colour mazes) is built but experimental and off by default.
 
 Patient context (from AUDIT_BRIEF): age 3, exotropia, **left eye turns out**, right eye reported normal. Not established: amblyopia, fixation preference, or suppression. Which eye wears the red lens is configurable. AAPOS: exercises have no proven benefit for intermittent exotropia in general (https://www.aapos.org/glossary/exotropia).
 
@@ -30,6 +30,23 @@ A Pop! version of fusion mode: a bubble for one eye carries a small ring seen on
 
 ## 6. Stereo / 3D — not built
 It needs the doctor's measurements (control, fusional vergence, stereoacuity) and a disparity plan for iPad viewing distance. AUDIT_CODEX lists the open questions.
+
+## 7. Two-colour mazes — built, experimental, off by default
+Maze settings has a **Colours** row. **One colour is the default**, and it is the maze as before: everything in the round's one eye. The three other modes change which eye sees what, so they are clinical behaviour: they are labelled experimental in the settings, they are never on at start, and nothing here claims any treatment effect. The choice is not saved: it is One colour on every page load and every time Maze is opened from another mode, and it is dropped if the eye plan is set to Both (Both has no other eye, so the row is shown disabled and play is one colour; going back to one eye does not turn a mode back on). "X" is the round's eye (it alternates per maze under Alternate), "Y" the other eye.
+
+| Mode | X eye sees | Y eye sees |
+|---|---|---|
+| One colour (default) | walls, characters, trails, the way | nothing |
+| Trail in other colour | walls, characters, the way | both trails |
+| Split walls | characters, both trails, about half the wall pieces | the other wall pieces |
+| Characters vs walls | walls | both characters, both trails |
+
+- **Split walls is a two-eye information design, not a fusion or suppression test.** Each wall piece (the outer border included, so there is no frame seen by both eyes) goes to one eye or the other, and the route through the maze is clear only from what both eyes show. It needs what both eyes see, not both eyes at the same instant, and a child can still bump into walls and learn by trial and error, so it cannot show that either eye is suppressed or that fusion happens. Each maze's split is checked by the app so that, for each eye alone, several places on or next to the true route show a plausible false way that only the other eye's wall closes, with false ways from both eyes; if no random split meets that in 60 tries the best one found is used. Where one eye's wall meets the other's the app leaves a small gap, so the two inks never touch.
+- **Trail in other colour carries an intentional experimental cue.** The trails are in Y while the characters and walls are in X, so Y sees where he has been. To avoid giving Y a live position cue at the thing he acts on, the Y trail stops a cell short of its character and never runs under either character. It still traces his route, so this is **not** a clean one-eye localisation task.
+- **Show the way is switched off in Split walls and Characters vs walls** (the setting is shown disabled with the reason): in Split walls it would give one eye the whole route, and in Characters vs walls the way, in X, would run under Y's characters and give X their positions.
+- Every colour still comes from the same ink ramp as the rest of the game, and the characters never overlap a wall of either eye. Eye separation itself can only be checked on the iPad: calibrate, then cover each eye in each mode.
+
+**Question for the doctor:** are any of these modes wanted for Leo, and for which eye plan? Until answered they stay hidden behind the experimental row, never the default.
 
 ## Questions to take to the doctor
 1. For Leo specifically, is the aim reducing suppression (if present), training fusion, or something else? This decides between items 2/3 and item 5.

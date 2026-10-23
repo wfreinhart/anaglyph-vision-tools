@@ -208,6 +208,9 @@ async function audit(page, ink, label){
   return recs;
 }
 
+const readNow2 = page => page.evaluate(() => ({
+  el:[...document.querySelectorAll('.mzchar')].map(e => { const b = e.getBoundingClientRect(); return { l:b.left, t:b.top, r:b.right, b:b.bottom }; }) }));
+
 /* ---------- panel helpers (real touchscreen taps) ---------- */
 async function openSheet(page){
   await page.locator('#gear').tap();
@@ -815,6 +818,301 @@ async function closeSheet(page){
       }
     }
     t('diagonal swipes across wall corners and back (' + tried + ' of them) leave the character on the rails with a legal trail', held && tried > 5, why);
+    await page.ctx.close();
+  }
+
+
+  /* ===== 9. two-colour modes (docs/maze-duo.md) ===== */
+  console.log('\ntwo-colour modes');
+  const MODES = ['one', 'trail', 'split', 'chars'];
+  const EYE = { L:'R', R:'L' };
+  /* which eye paints what, from the spec table, written out independently of the page */
+  const WHO = (mode, X) => ({
+    one:   { wall:X, wallY:null, piece:X, trail:X, sol:X },
+    trail: { wall:X, wallY:null, piece:X, trail:EYE[X], sol:X },
+    chars: { wall:X, wallY:null, piece:EYE[X], trail:EYE[X], sol:X },
+    split: { wall:X, wallY:EYE[X], piece:X, trail:X, sol:X }
+  })[mode];
+  async function setColours(page, mode){
+    await openSheet(page);
+    await page.locator('#mazeColoursChips [data-colours="' + mode + '"]').tap();
+    await closeSheet(page);
+    await page.waitForSelector('svg.maze');
+    await sleep(150);
+  }
+  const colours = page => page.evaluate(() => document.querySelector('svg.maze').dataset.colours);
+
+  /* every paint in the field is on the ramp of the eye the table gives that element */
+  async function auditModes(page, cal, mode, X, label){
+    const w = WHO(mode, X), inkE = e => inkOf(cal, e);
+    const recs = await page.evaluate(() => {
+      const out = [];
+      document.getElementById('field').querySelectorAll('*').forEach(el => {
+        const cs = getComputedStyle(el), tag = el.tagName.toLowerCase();
+        const paints = [];
+        if (el instanceof SVGElement){ if (['path', 'circle', 'rect', 'ellipse', 'line', 'polygon', 'polyline'].indexOf(tag) >= 0) paints.push(['fill', cs.fill], ['stroke', cs.stroke]); }
+        else paints.push(['background', cs.backgroundColor]);
+        const flags = [];
+        if (cs.opacity !== '1') flags.push('opacity');
+        if (cs.filter && cs.filter !== 'none') flags.push('filter');
+        if (cs.boxShadow && cs.boxShadow !== 'none') flags.push('shadow');
+        out.push({ tag:tag, cls:String(el.getAttribute('class') || ''), eye:el.getAttribute('data-eye'), inChar:!!el.closest('.mzchar'), paints:paints, flags:flags });
+      });
+      return out;
+    });
+    let n = 0, bad = [], flags = [], seen = { wall:0, wallY:0, piece:0, trail:0, sol:0 };
+    recs.forEach(r => {
+      r.flags.forEach(f => flags.push(r.tag + '.' + r.cls + ' ' + f));
+      let role = null;
+      if (r.inChar) role = 'piece';
+      else if (/\bmzwall\b/.test(r.cls)) role = r.eye === 'y' ? 'wallY' : 'wall';
+      else if (/\bmztrail\b/.test(r.cls)) role = 'trail';
+      else if (/\bmzsol\b/.test(r.cls)) role = 'sol';
+      r.paints.forEach(([prop, val]) => {
+        const c = parseColor(val);
+        if (c.none) return;
+        n++;
+        if (!role){ bad.push(r.tag + '.' + r.cls + ' ' + prop + ' has a paint and no role'); return; }
+        const eye = w[role];
+        if (!eye){ bad.push(role + ' present in ' + mode); return; }
+        seen[role]++;
+        const o = c.bad ? { ok:false, why:c.bad } : onRamp(c, inkE(eye));
+        if (!o.ok) bad.push(role + ' (' + r.tag + '.' + r.cls + ' ' + prop + ' ' + val + ') not on ' + eye + ' ramp ' + o.why);
+      });
+    });
+    t(label + ': ' + n + ' paints, each on the ramp of the eye the table gives it', bad.length === 0 && n > 0, bad.slice(0, 3).join(' | '));
+    t(label + ': no opacity, filter or shadow on any field element', flags.length === 0, flags.slice(0, 2).join(' | '));
+    t(label + ': the walls, characters and trails are all painted' + (mode === 'split' ? ', both eyes\' walls too' : ''),
+      seen.wall > 0 && seen.piece > 0 && seen.trail > 0 && (mode !== 'split' || seen.wallY > 0), JSON.stringify(seen));
+  }
+
+  /* pixel audit: no pixel of the maze may be off every ramp in use (a mixed-ink pixel is) */
+  async function pixelAudit(page, cal, mode, X, label){
+    const w = WHO(mode, X), inks = [...new Set([w.wall, w.wallY, w.piece, w.trail].filter(Boolean).map(e => inkOf(cal, e)))];
+    const clip = await page.evaluate(() => { const r = document.querySelector('svg.maze').getBoundingClientRect(); return { x:Math.floor(r.left) - 4, y:Math.floor(r.top) - 4, width:Math.ceil(r.width) + 8, height:Math.ceil(r.height) + 8 }; });
+    const shot = (await page.screenshot({ clip:clip })).toString('base64');
+    const res = await page.evaluate(async ([b64, inks]) => {
+      const img = new Image();
+      img.src = 'data:image/png;base64,' + b64;
+      await img.decode();
+      const cv = document.createElement('canvas');
+      cv.width = img.width; cv.height = img.height;
+      const g = cv.getContext('2d');
+      g.drawImage(img, 0, 0);
+      const px = g.getImageData(0, 0, cv.width, cv.height).data;
+      const rgb = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+      const dist = (c, ink) => {
+        const b = rgb(ink), v = [b[0] - 255, b[1] - 255, b[2] - 255], l2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+        const k = Math.max(0, Math.min(1, ((c[0] - 255) * v[0] + (c[1] - 255) * v[1] + (c[2] - 255) * v[2]) / l2));
+        return Math.max(Math.abs(c[0] - (255 + v[0] * k)), Math.abs(c[1] - (255 + v[1] * k)), Math.abs(c[2] - (255 + v[2] * k)));
+      };
+      let nonWhite = 0, off = 0, worst = 0, firstOff = null;
+      const hit = inks.map(() => 0);
+      for (let i = 0; i < px.length; i += 4){
+        const c = [px[i], px[i + 1], px[i + 2]];
+        if (c[0] > 252 && c[1] > 252 && c[2] > 252) continue;
+        nonWhite++;
+        const ds = inks.map(k => dist(c, k)), m = Math.min.apply(null, ds);
+        ds.forEach((d, j) => { if (d <= 4 && Math.max.apply(null, c.map((v, q) => 255 - v)) > 200) hit[j]++; });
+        if (m > 4){ off++; worst = Math.max(worst, m); if (!firstOff) firstOff = c.join(','); }
+      }
+      return { nonWhite:nonWhite, off:off, worst:worst, firstOff:firstOff, hit:hit };
+    }, [shot, inks]);
+    t(label + ': ' + res.nonWhite + ' inked pixels (walls, joins, border, pieces), none off every ramp in use', res.nonWhite > 500 && res.off === 0, res.off + ' off, worst ' + res.worst.toFixed(1) + ' e.g. ' + res.firstOff);
+    if (mode === 'split' || mode === 'chars') t(label + ': both eyes\' inks appear at full strength in the picture', res.hit.every(h => h > 50), res.hit.join('/'));
+  }
+
+  for (const cal of ['std', 'meas']) for (const X of ['L', 'R']) for (const mode of MODES){
+    const page = await openPage(browser, { cal:CAL[cal], game:{ eyePlan:X, mazeN:cal === 'std' ? 4 : 3 } });
+    if (mode !== 'one') await setColours(page, mode);
+    const tag = cal + ' X=' + X + ' ' + mode;
+    t(tag + ': the maze is in that mode', await colours(page) === mode);
+    await auditModes(page, CAL[cal], mode, X, tag);
+    if (cal === 'std') await pixelAudit(page, CAL[cal], mode, X, tag);
+    t(tag + ': no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+
+  /* the mode on an Alternate plan: each next maze is the other eye's, with the table applied to it */
+  {
+    const page = await openPage(browser, { game:{ eyePlan:'alt', mazeN:3 } });
+    await setColours(page, 'trail');
+    const eyes = [];
+    for (let round = 0; round < 2; round++){
+      const tr = await page.evaluate(() => getComputedStyle(document.querySelector('.mztrail')).stroke);
+      const wl = await page.evaluate(() => getComputedStyle(document.querySelector('.mzwall')).stroke);
+      const c = parseColor(tr), d = parseColor(wl);
+      const trEye = ['L', 'R'].find(e => onRamp(c, inkOf(CAL.std, e)).ok && onRamp(c, inkOf(CAL.std, e)).k > 0.99);
+      const wlEye = ['L', 'R'].find(e => onRamp(d, inkOf(CAL.std, e)).ok && onRamp(d, inkOf(CAL.std, e)).k > 0.99);
+      t('alternate round ' + (round + 1) + ': walls and trails are in opposite eyes (' + wlEye + '/' + trEye + ')', !!wlEye && !!trEye && wlEye !== trEye);
+      eyes.push(wlEye);
+      if (round === 0){
+        const I = await info(page), sol = solve(I);
+        await hop(page, I, sol.slice(1));
+        await sleep(1900);
+      }
+    }
+    t('Alternate gives the other eye the walls in the next maze (' + eyes.join(' then ') + ')', eyes.length === 2 && eyes[0] !== eyes[1]);
+    t('no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+
+  /* the chooser: reset on load, on entry, never silently re-activated; Both disables it */
+  console.log('\ntwo-colour chooser rules');
+  {
+    const page = await openPage(browser, { game:{ eyePlan:'L', mazeN:3, mazeShow:true, mazeSlow:false, mazeColours:'split' } });
+    t('a mazeColours value planted in storage is ignored: One colour on load', await colours(page) === 'one');
+    await setColours(page, 'split');
+    t('choosing Split walls plays Split walls', await colours(page) === 'split');
+    const stored = await page.evaluate(() => Object.keys(localStorage).map(k => localStorage.getItem(k)).join('\n'));
+    t('nothing in storage records the choice', !/mazeColours/.test(stored), stored.slice(0, 160));
+    t('the saved Show the way choice is untouched by it', /"mazeShow":true/.test(stored));
+    await page.reload(); await page.waitForSelector('svg.maze'); await sleep(300);
+    t('after a reload it is One colour again', await colours(page) === 'one');
+    t('and the chooser shows One colour on', await page.evaluate(() => document.querySelector('#mazeColoursChips .chip.on').dataset.colours) === 'one');
+    await setColours(page, 'chars');
+    await openSheet(page);
+    await page.locator('#modeChips [data-mode="jigsaw"]').tap(); await closeSheet(page);
+    await openSheet(page);
+    await page.locator('#modeChips [data-mode="maze"]').tap(); await closeSheet(page);
+    await page.waitForSelector('svg.maze');
+    t('entering Maze from another mode resets it to One colour', await colours(page) === 'one');
+    await setColours(page, 'trail');
+    t('the choice holds for successive mazes in the visit', await colours(page) === 'trail');
+    await openSheet(page);
+    await page.locator('#eyeChips [data-eye="both"]').tap();
+    t('under the Both plan the chooser is shown but disabled, with its reason',
+      await page.evaluate(() => [...document.querySelectorAll('#mazeColoursChips .chip')].every(b => b.disabled) &&
+                                /Both/.test(document.getElementById('mazeColoursNote').textContent) &&
+                                document.getElementById('mazeColoursRow').classList.contains('off') && !document.getElementById('mazeColoursRow').classList.contains('hide')));
+    await closeSheet(page);
+    t('and play is One colour', await colours(page) === 'one');
+    await openSheet(page);
+    await page.locator('#eyeChips [data-eye="R"]').tap(); await closeSheet(page);
+    t('going back to one eye does not switch the mode back on', await colours(page) === 'one');
+    t('and the chooser is enabled again, on One colour', await page.evaluate(() => [...document.querySelectorAll('#mazeColoursChips .chip')].every(b => !b.disabled) &&
+      document.querySelector('#mazeColoursChips .chip.on').dataset.colours === 'one'));
+    await openSheet(page);
+    t('the three modes are labelled experimental with a line each',
+      await page.evaluate(() => /Experimental/.test(document.getElementById('mazeColoursRow').textContent)));
+    for (const [mode, re] of [['trail', /trails.*other eye/i], ['split', /wall piece.*one eye or the other/i], ['chars', /characters and both trails go to the other eye/i]]){
+      await page.locator('#mazeColoursChips [data-colours="' + mode + '"]').tap();
+      t('the ' + mode + ' description says what each eye sees', re.test(await page.textContent('#mazeColoursNote')), await page.textContent('#mazeColoursNote'));
+    }
+    await closeSheet(page);
+    t('no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+
+  /* Show the way: offered in One colour and Trail in other colour, disabled with a reason in the other two */
+  console.log('\nshow the way by mode');
+  for (const mode of MODES){
+    const page = await openPage(browser, { game:{ eyePlan:'L', mazeN:3, mazeShow:true, mazeSlow:false } });
+    if (mode !== 'one') await setColours(page, mode);
+    const way = mode === 'one' || mode === 'trail';
+    t(mode + ': the way is ' + (way ? 'drawn' : 'not drawn although saved on'), (await page.locator('.mzsol').count()) === (way ? 1 : 0));
+    await openSheet(page);
+    const st = await page.evaluate(() => ({ dis:document.getElementById('mazeShow').disabled, off:document.getElementById('mazeShowRow').classList.contains('off'),
+                                            sub:document.getElementById('mazeShowSub').textContent, on:document.getElementById('mazeShow').getAttribute('aria-checked') }));
+    t(mode + ': the Show the way switch is ' + (way ? 'enabled' : 'disabled, greyed, with the reason'),
+      way ? !st.dis && !st.off : st.dis && st.off && /Not available/.test(st.sub), JSON.stringify(st));
+    t(mode + ': the saved choice still reads on', st.on === 'true');
+    await closeSheet(page);
+    if (!way){
+      await setColours(page, 'one');
+      t('back in One colour the saved Show the way is used again', (await page.locator('.mzsol').count()) === 1);
+    }
+    await page.ctx.close();
+  }
+
+  /* trail in other colour: the visible trail stays a cell short of both characters, throughout a drag */
+  console.log('\ndelayed other-colour trail');
+  for (const n of [3, 6]) for (const who of ['A', 'B']){
+    const page = await openPage(browser, { game:{ eyePlan:'R', mazeN:n } });
+    await setColours(page, 'trail');
+    const I = await info(page), sol = solve(I), route = who === 'A' ? sol : sol.slice().reverse(), cs = I.cs;
+    const probe = () => page.evaluate(() => {
+      const d = document.querySelector('svg.maze').dataset, cs = Number(d.cs), N = Number(d.n);
+      const pt = s => { const [h, nx, f] = s.split(',').map(Number); let x = h % N + 0.5, y = Math.floor(h / N) + 0.5;
+                        if (nx >= 0){ x += (nx % N + 0.5 - x) * f; y += (Math.floor(nx / N) + 0.5 - y) * f; } return { x:x * cs, y:y * cs }; };
+      const chars = [pt(d.posA), pt(d.posB)];
+      const trails = [...document.querySelectorAll('.mztrail')].map(p => (p.getAttribute('d') || '').match(/-?[\d.]+ -?[\d.]+/g) || []).map(a => a.map(q => q.split(' ').map(Number)));
+      return { chars:chars, trails:trails, ta:d.trailA.split(',').length, tb:d.trailB.split(',').length };
+    });
+    const closest = (poly, q) => { let best = Infinity; for (let k = 1; k < poly.length; k++){ const a = poly[k - 1], b = poly[k], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      const u = l2 ? Math.max(0, Math.min(1, ((q.x - a[0]) * dx + (q.y - a[1]) * dy) / l2)) : 0; best = Math.min(best, Math.hypot(a[0] + dx * u - q.x, a[1] + dy * u - q.y)); } return best; };
+    let worst = Infinity, samples = 0, drawn = 0, fullyDrawn = false;
+    await down(page, ctr(I, route[0]));
+    for (let i = 1; i < route.length - 1; i++){
+      const a = ctr(I, route[i - 1]), b = ctr(I, route[i]);
+      for (let q = 1; q <= 4; q++){
+        await move(page, { x:a.x + (b.x - a.x) * q / 4, y:a.y + (b.y - a.y) * q / 4 });
+        const P = await probe();
+        samples++;
+        P.trails.forEach(poly => { if (poly.length > 1){ drawn++; P.chars.forEach(c => { worst = Math.min(worst, closest(poly, c)); }); } });
+      }
+    }
+    // the other character's trail passes under nothing either: park it on the first trail's route and look again
+    await up(page, ctr(I, route[route.length - 2]));
+    const P = await probe();
+    P.trails.forEach(poly => { if (poly.length > 1) P.chars.forEach(c => { worst = Math.min(worst, closest(poly, c)); }); });
+    t('n=' + n + ' ' + who + ': ' + samples + ' drag samples: the other-colour trail never comes within one cell of either character (closest ' + (worst / cs).toFixed(3) + ' cell)',
+      samples > 0 && drawn > 0 && worst >= cs - 0.75, (worst / cs).toFixed(3));
+    t('n=' + n + ' ' + who + ': no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+
+  /* clearance: a character never overlaps a wall of either eye, measured against the walls as painted */
+  console.log('\nclearance in the two-colour modes');
+  for (const mode of ['split', 'chars', 'trail']) for (const vp of [{ width:1024, height:768 }, { width:768, height:1024 }]){
+    const page = await openPage(browser, { viewport:vp, game:{ eyePlan:'L', mazeN:8 } });
+    await setColours(page, mode);
+    const I = await info(page), cs = I.cs, sol = solve(I);
+    // the walls as painted: rectangles of the real stroked paths, both eyes' together
+    const painted = await page.evaluate(() => {
+      const s = document.querySelector('svg.maze'), r = s.getBoundingClientRect(), vb = s.viewBox.baseVal, L = r.left - vb.x, T = r.top - vb.y;
+      const out = [];
+      document.querySelectorAll('.mzwall').forEach(p => {
+        const ww = parseFloat(getComputedStyle(p).strokeWidth);
+        [...(p.getAttribute('d') || '').matchAll(/M(-?[\d.]+) (-?[\d.]+)L(-?[\d.]+) (-?[\d.]+)/g)].forEach(q => {
+          const [x1, y1, x2, y2] = q.slice(1).map(Number), hz = y1 === y2;
+          out.push([L + Math.min(x1, x2) - (hz ? 0 : ww / 2), T + Math.min(y1, y2) - (hz ? ww / 2 : 0), L + Math.max(x1, x2) + (hz ? 0 : ww / 2), T + Math.max(y1, y2) + (hz ? ww / 2 : 0)]);
+        });
+        // the one-colour wall is a single path with square caps and Z / H / V commands: use the model rectangles there
+      });
+      return out;
+    });
+    const rects = painted.length > 20 ? painted : wallRects(I);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('.mzwall')].map(p => (p.getAttribute('d') || '').slice(0, 1)));
+    let bad = [], samples = 0;
+    const line = [];
+    for (let i = 1; i < sol.length; i++){
+      const a = ctr(I, sol[i - 1]), b = ctr(I, sol[i]);
+      for (let q = 1; q <= 4; q++) line.push({ x:a.x + (b.x - a.x) * q / 4, y:a.y + (b.y - a.y) * q / 4 });
+    }
+    await down(page, ctr(I, sol[0]));
+    for (const p of line){
+      await move(page, p);
+      const S = await readNow2(page);
+      samples++;
+      S.el.forEach((e, k) => rects.forEach(R => { if (e.l < R[2] - 0.01 && e.r > R[0] + 0.01 && e.t < R[3] - 0.01 && e.b > R[1] + 0.01) bad.push('char ' + k + ' over a wall'); }));
+      if (await page.locator('#burst span').count()) break;
+    }
+    t(mode + ' ' + vp.width + 'x' + vp.height + ' 8x8: ' + samples + ' samples, ' + rects.length + ' painted wall rectangles' + (mode === 'split' ? ' (both eyes)' : '') + ': a character\'s box never overlaps any',
+      bad.length === 0 && samples > 20, bad.slice(0, 2).join(' | '));
+    if (mode === 'split') t('split walls: the painted walls are two paths, one per eye, and nothing else', rows.length === 2);
+    t(mode + ' ' + vp.width + 'x' + vp.height + ': no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+
+  /* split walls: a dedicated check at the corners, the T joins and the border, at two sizes of maze */
+  console.log('\nsplit-wall joins');
+  for (const n of [3, 6, 8]){
+    const page = await openPage(browser, { game:{ eyePlan:'L', mazeN:n } });
+    await setColours(page, 'split');
+    await pixelAudit(page, CAL.std, 'split', 'L', 'split n=' + n + ' joins and border');
+    const meta = await page.evaluate(() => { const d = document.querySelector('svg.maze').dataset; return { fb:d.splitFallback, at:d.splitAttempts, c:d.splitCounts }; });
+    t('split n=' + n + ': the split is recorded on the maze (attempts ' + meta.at + ', false choices per eye ' + meta.c + ', fallback ' + meta.fb + ')', meta.fb === '0' || meta.fb === '1');
     await page.ctx.close();
   }
 
