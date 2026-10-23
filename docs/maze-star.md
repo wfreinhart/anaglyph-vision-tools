@@ -32,3 +32,29 @@ collection exactly once along rails (swipe, release; not cancel; not through wal
 packs. webkit_smoke (emulated): rendered audit during star power (every paint on the assigned ramp;
 rainbow colours only after the win and gone before the next maze); sound stops on hide/mode change;
 reduced motion steady. iPad: cover-eye check with star power on.
+
+## As built (2026-10-23)
+Constants live in `MAZE` (puzzle.html): `starChance` 1/3, `starReach` 0.3 cell, `starSecs` 8, `starSize` 0.5 cell,
+`shimmerSecs` 4, `shimmerLo/Hi` 0.25/0.85, `steady` [0.8, 0.35], `beat` 0.11 s, `tune`.
+- **Placement** (`mazeStarPlan`, pure, from the maze seed): only if `mazeStarWanted(state.packs)`. On an
+  interior route cell chosen uniformly. In Split walls the star is X ink, so X learns that cell is on the route:
+  `mazeSplitScore(maze, segs, assign, star)` re-counts X's false branches with that cell known (a branch before the star
+  only counts if it returns no later than the star and never goes past it), and the star is placed only on a cell where
+  X still has at least `need` of them; never in a split that already failed. Y's count is unaffected.
+- **Clearance:** the star is 0.5 cell, narrower than a character (0.62), at a cell centre, so it clears walls as a character
+  does. In Trail in other colour the cut trail stays at least a cell behind its tip and the star is taken when the tip is within
+  0.3 cell, so the other-eye trail is at least 0.7 cell from an untaken star (tested: closest 1.00).
+- **Collection** (`mazeStarSlide`): a `mazeSlide` whose per-sample callback tests the tip's distance to the star along the rails
+  (`mazeGap`, never straight through a wall); `starReach` x 2 exceeds a slide step so a sample cannot skip it. `got` is latched.
+  Release goes through the same `mazeMove`; `pointercancel` never moves or scores.
+- **Shimmer:** while powered the character's element gets class `powered` and `--sh1/--sh2`, set by `mazeStarTones` to
+  `rampInk(eye, t)` for two slow sines half a turn apart in [0.25, 0.85]; CSS `.mzchar.powered .t1/.t2{fill:var(--shN)}`.
+  The silhouette is untouched. Under `prefers-reduced-motion` the tones sit at `steady` and no animation loop runs. A character
+  with no `.t1/.t2` parts (Mario Items shapes) shows no shimmer, only the music.
+- **Sound** (`starSoundStart/Stop`): own oscillators, scheduled 0.35 s ahead every 100 ms, each tracked; stopped (30 ms fade) on
+  time, win, new round (mode or colour change, leaving Maze), page hide, `pagehide`, and when the sound setting goes off.
+  The tune is a bouncing C-pentatonic run (never the same note twice in a row, a bass note every fourth beat), not the kart theme.
+- **Win while powered:** power ends; `celebrate(at, true)` makes 12 fixed 30px stars in six fixed colours (`RAINBOW`, the only
+  colour literals outside the ramp), removed after 1.0 s and swept by `newRound` (1.4 s).
+- Test hook: `window.mazeStarForce` (1 always, 0 never; tests only). Data attributes `data-star` (cell or -1) and
+  `data-star-state` (none / waiting / power / spent).

@@ -973,6 +973,308 @@ function mazeSuite(label, m, g){
       /const made = mazeMode\(\) === 'split' \? mazeWithSplit\(state\.mazeN, seed\)\s*: \{ maze:makeMaze\(state\.mazeN, seed\), seed:seed, split:null \}/.test(code) &&
       /split:made\.split/.test(code) && !/mazeSplit\(|mazeWithSplit\(/.test(braceBlock(src, 'function mazeDraw(')));
   }
+
+  /* ===== power-up star (docs/maze-star.md) ===== */
+  console.log('  power-up star');
+  {
+    const MZ2 = m.MAZE, EPS3 = 1e-9;
+    const c2 = (n, i) => ({ x:i % n + 0.5, y:Math.floor(i / n) + 0.5 });
+
+    // only with a Mario pack
+    t('a star is wanted with the Mushroom Kingdom pack, the Mario Items pack, or both',
+      m.mazeStarWanted(['kingdom']) && m.mazeStarWanted(['kingdomitems']) && m.mazeStarWanted(['classic', 'kingdom', 'kingdomitems']));
+    t('no star without a Mario pack, or with junk for the pack list',
+      !m.mazeStarWanted(['classic']) && !m.mazeStarWanted(['iceage', 'mouseclub', 'spaceknights']) && !m.mazeStarWanted([]) &&
+      !m.mazeStarWanted(null) && !m.mazeStarWanted(undefined) && !m.mazeStarWanted('kingdom'));
+    t('the code asks mazeStarWanted(state.packs) before placing a star', /mazeStarWanted\(state\.packs\)\s*\?\s*mazeStarPlan\(/.test(src));
+
+    // placement
+    let interior = true, deterministic2 = true, nPlaced = 0, nTried = 0, never0 = true, all1 = true, noEnds = true;
+    SIZES.forEach(n => {
+      let placed = 0;
+      for (let seed = 0; seed < 600; seed++){
+        const sd = (seed * 2654435761 + 3) % 4294967296, mz = m.makeMaze(n, sd), route = m.mazeSolve(mz);
+        const c = m.mazeStarPlan(mz, sd, null);
+        nTried++;
+        if (c >= 0){
+          placed++; nPlaced++;
+          const k = route.indexOf(c);
+          if (k < 1 || k > route.length - 2) interior = false;
+          if (c === mz.start || c === mz.goal) noEnds = false;
+        }
+        if (m.mazeStarPlan(mz, sd, null) !== c) deterministic2 = false;
+        if (m.mazeStarPlan(mz, sd, null, 0) !== -1) never0 = false;
+        const c1 = m.mazeStarPlan(mz, sd, null, 1);
+        if (c1 < 0 || route.indexOf(c1) < 1 || route.indexOf(c1) > route.length - 2) all1 = false;
+      }
+      const rate = placed / 600;
+      t(n + 'x' + n + ': about one maze in three gets a star (' + placed + ' of 600)', rate > 0.28 && rate < 0.38);
+    });
+    t('the star always sits on an interior cell of the solution route (' + nPlaced + ' of ' + nTried + ' mazes), never on either end', interior && noEnds && all1);
+    t('the same maze and seed give the same star; chance 0 never places one; chance 1 always does', deterministic2 && never0 && all1);
+    t('one named constant sets how often (MAZE.starChance is about 1/3)', Math.abs(MZ2.starChance - 1 / 3) < 0.01);
+
+    // split walls: placement must not weaken the criterion
+    {
+      // independent X-side count with the star known: union-find over X's monocular graph, route cells after
+      // the star deleted, a branch before the star counts when v's component holds a route cell after u up to the star
+      const indepStar = (mz, segs, assign, star) => {
+        const n = mz.n, route = m.mazeSolve(mz), idx = {};
+        route.forEach((c, k) => { idx[c] = k; });
+        const hid = new Set();
+        segs.forEach((sg, k) => { if (sg.b >= 0 && assign[k] === 1) hid.add(sg.a + ':' + sg.b).add(sg.b + ':' + sg.a); });
+        const edges = [];
+        for (let a = 0; a < n * n; a++) for (let b = a + 1; b < n * n; b++)
+          if (nb(mz, a).indexOf(b) >= 0 || hid.has(a + ':' + b)) edges.push([a, b]);
+        let out = 0;
+        route.forEach(u => {
+          const lim = star >= 0 && idx[u] < idx[star] ? idx[star] : Infinity;
+          const gone = c => c === u || (lim < Infinity && idx[c] !== undefined && idx[c] > lim);
+          const par = [...Array(n * n).keys()], find = x => par[x] === x ? x : (par[x] = find(par[x]));
+          edges.forEach(([a, b]) => { if (!gone(a) && !gone(b)) par[find(a)] = find(b); });
+          const hit = edges.some(([a, b]) => {
+            const v = a === u ? b : (b === u ? a : -1);
+            if (v < 0 || nb(mz, u).indexOf(v) >= 0 || gone(v)) return false;
+            return route.some(w => idx[w] > idx[u] && idx[w] <= lim && !gone(w) && find(w) === find(v));
+          });
+          if (hit) out++;
+        });
+        return out;
+      };
+      let honest2 = true, yUntouched = true, counted2 = true, noFail = true, some = 0, total = 0, biting = 0, onRoute = true;
+      SIZES.forEach(n => {
+        for (let seed = 0; seed < 120; seed++){
+          const s0 = (seed * 2654435761 + 29) % 4294967296, made = m.mazeWithSplit(n, s0), sp = made.split, mz = made.maze;
+          const route = m.mazeSolve(mz), c = m.mazeStarPlan(mz, made.seed, sp, 1);
+          total++;
+          if (c < 0) continue;
+          some++;
+          if (sp.fallback) noFail = false;
+          if (route.indexOf(c) < 1 || route.indexOf(c) > route.length - 2) onRoute = false;
+          const withStar = m.mazeSplitScore(mz, sp.segs, sp.assign, c), plain = m.mazeSplitScore(mz, sp.segs, sp.assign);
+          if (withStar[0] < sp.need) honest2 = false;
+          if (withStar[1] !== plain[1]) yUntouched = false;
+          if (indepStar(mz, sp.segs, sp.assign, c) !== withStar[0]) counted2 = false;
+          if (withStar[0] < plain[0]) biting++;
+        }
+      });
+      t('split walls: a placed star leaves X at least `need` false branches with that cell known (' + some + ' of ' + total + ' splits carry one)', honest2 && some > total / 2 && noFail && onRoute);
+      t('split walls: the star changes only X\'s count, never Y\'s (Y does not see it)', yUntouched);
+      t('split walls: the star-aware count equals an independent re-count; the star lowers X\'s count in ' + biting + ' placements and the filter keeps it above the floor', counted2);
+      // hand-built: a shortcut that skips the star stops counting once the star is known
+      const mkHand = (edgesOpen, start, goal, toY) => {
+        const mz = { n:3, open:new Array(9).fill(0), start, goal };
+        edgesOpen.forEach(([a, b]) => { const d = b - a; const bit = d === 1 ? [2, 8] : [4, 1]; mz.open[a] |= bit[0]; mz.open[b] |= bit[1]; });
+        const segs = m.mazeSegs(mz), yset = new Set(toY.map(([a, b]) => a + ':' + b));
+        return { mz, segs, assign:segs.map(sg => sg.b >= 0 && yset.has(Math.min(sg.a, sg.b) + ':' + Math.max(sg.a, sg.b)) ? 1 : 0) };
+      };
+      const sp1 = mkHand([[0, 1], [1, 2], [2, 5], [5, 8], [7, 8], [6, 7], [3, 6], [3, 4]], 0, 4, [[0, 3]]);
+      t('hand-built: the 0-3 shortcut counts for X with no star, and stops counting once a star on cell 2 shows X the route runs past it',
+        m.mazeSplitScore(sp1.mz, sp1.segs, sp1.assign)[0] === 1 && m.mazeSplitScore(sp1.mz, sp1.segs, sp1.assign, 2)[0] === 0 &&
+        indepStar(sp1.mz, sp1.segs, sp1.assign, 2) === 0);
+      t('hand-built: a star on cell 3, where the shortcut lands, leaves the count alone; one on cell 7 (the shortcut skips it) removes it',
+        m.mazeSplitScore(sp1.mz, sp1.segs, sp1.assign, 3)[0] === 1 && m.mazeSplitScore(sp1.mz, sp1.segs, sp1.assign, 7)[0] === 0 &&
+        indepStar(sp1.mz, sp1.segs, sp1.assign, 3) === 1 && indepStar(sp1.mz, sp1.segs, sp1.assign, 7) === 0);
+      t('no star argument leaves mazeSplitScore exactly as before', m.mazeSplitScore(sp1.mz, sp1.segs, sp1.assign).join() === m.mazeSplitScore(sp1.mz, sp1.segs, sp1.assign, -1).join());
+      const noFb = { fallback:true, need:1, segs:sp1.segs, assign:sp1.assign };
+      t('split walls: no star in a split that already failed the criterion', m.mazeStarPlan(sp1.mz, 5, noFb, 1) === -1);
+    }
+
+    // collection along the rails
+    {
+      let onceOk = true, flickOk = true, releaseOk = true, wallOk = true, nWall = 0, beforeOk = true, afterGone = true, otherOk = true, nFlick = 0;
+      SIZES.forEach(n => {
+        for (let seed = 0; seed < 60; seed++){
+          const sd = seed * 7919 + n, mz = m.makeMaze(n, sd), route = m.mazeSolve(mz);
+          const cell = m.mazeStarPlan(mz, sd, null, 1), k = route.indexOf(cell);
+          // 1) walk the route from the start, the finger a whole cell on at each sample (four times the usual sub-sample)
+          const A = m.mazeWalker(mz.start), B = m.mazeWalker(mz.goal), star = { cell, got:false };
+          let gots = 0, at = c2(n, route[0]), reach = false;
+          for (let i = 1; i < route.length - 1 && gots === 0; i++){
+            const p = c2(n, route[i]);                                       // one whole cell per finger sample
+            const r = m.mazeStarSlide(mz, A, at, p, 1, B, star, false);
+            at = p;
+            if (r.got){ gots++; if (!m.mazeStarTouched(mz, A, cell)) beforeOk = false; }
+            if (route.indexOf(A.trail[A.trail.length - 1]) > k + 1) reach = true;
+          }
+          nFlick++;
+          if (gots !== 1 || !star.got || reach) flickOk = false;
+          // 2) once taken, never again: back and forth over it
+          for (let rep = 0; rep < 3; rep++){
+            [route[Math.max(0, k - 1)], cell, route[Math.min(route.length - 2, k + 1)], cell].forEach(c => {
+              const p = c2(n, c), r = m.mazeStarSlide(mz, A, at, p, 1, B, star, true);
+              at = p;
+              if (r.got) afterGone = false;
+            });
+          }
+          // 3) a release onto it: the finger lifts exactly on the star after a move from the previous cell
+          const A3 = m.mazeWalker(mz.start), B3 = m.mazeWalker(mz.goal), star3 = { cell, got:false };
+          let at3 = c2(n, route[0]), got3 = 0;
+          for (let i = 1; i < k; i++){
+            const p = c2(n, route[i]);
+            if (m.mazeStarSlide(mz, A3, at3, p, 1, B3, star3, false).got) got3++;
+            at3 = p;
+          }
+          const rel = m.mazeStarSlide(mz, A3, at3, c2(n, cell), 1, B3, star3, true);
+          if (got3 + (rel.got ? 1 : 0) !== 1 || !star3.got) releaseOk = false;
+          // 4) from the other end: B reaches it too, and the other character A need not
+          const A4 = m.mazeWalker(mz.start), B4 = m.mazeWalker(mz.goal), star4 = { cell, got:false };
+          let at4 = c2(n, route[route.length - 1]), got4 = 0;
+          for (let i = route.length - 2; i > k - 1 && !got4; i--){
+            const p = c2(n, route[i]);
+            if (m.mazeStarSlide(mz, B4, at4, p, 1, A4, star4, false).got) got4++;
+            at4 = p;
+          }
+          if (got4 !== 1) otherOk = false;
+          // 5) never through a wall: from each cell next to the star across a closed wall, push straight at it
+          [[0,-1,1],[1,0,2],[0,1,4],[-1,0,8]].forEach(d => {
+            if (mz.open[cell] & d[2]) return;
+            const cc = cell % n + d[0], rr = Math.floor(cell / n) + d[1];
+            if (cc < 0 || cc >= n || rr < 0 || rr >= n) return;
+            const q = rr * n + cc, W = m.mazeWalker(q), O = m.mazeWalker(route[0] === q ? route[route.length - 1] : route[0]), st = { cell, got:false };
+            nWall++;
+            const r = m.mazeStarSlide(mz, W, c2(n, q), { x:c2(n, cell).x + d[0] * -0.5 * 0, y:c2(n, cell).y }, 1, O, st, true);
+            const r2 = m.mazeStarSlide(mz, W, c2(n, cell), { x:c2(n, cell).x - d[0] * 2, y:c2(n, cell).y - d[1] * 2 }, 1, O, st, true);
+            if (r.got || r2.got || st.got) wallOk = false;
+          });
+        }
+      });
+      t('a quick drag along the route (a cell per sample) takes the star exactly once, only when the tip is within ' + MZ2.starReach + ' cell of it along the rails (' + nFlick + ' mazes)', flickOk && beforeOk);
+      t('once taken it is never taken again, however often he runs back over it', afterGone);
+      t('lifting the finger onto the star takes it (the release counts)', releaseOk);
+      t('either character can take it', otherOk);
+      t('a finger pushed through a wall at the star never takes it (' + nWall + ' wall pushes)', wallOk && nWall > 20);
+      t('the reach is under the step plus the star\'s width, so no slide can skip over it', MZ2.starReach * 2 > MZ2.step - 1e-9 && MZ2.starReach * 2 >= MZ2.step);
+      t('the slide with no star is mazeSlide itself (same result, no star check)',
+        (() => {
+          const mz = m.makeMaze(4, 11), A = m.mazeWalker(mz.start), A2 = m.mazeWalker(mz.start), B = m.mazeWalker(mz.goal);
+          const route = m.mazeSolve(mz), p = c2(4, route[2]), q = c2(4, route[0]);
+          const r1 = m.mazeSlide(mz, A, q, p, 1, B, null, true), r2 = m.mazeStarSlide(mz, A2, q, p, 1, B, null, true);
+          return JSON.stringify(A) === JSON.stringify(A2) && r1.moved === r2.moved && r1.joined === r2.joined && r2.got === false;
+        })());
+      t('pointercancel never moves or scores (the star cannot be taken on a cancel)',
+        /if \(e\.type === 'pointerup'\) mazeMove\(e\);\s*if \(drag\) mazeRelease\(\);/.test(src) && /function onDrop\(e\)\{[\s\S]*?if \(drag\.maze\)\{[\s\S]*?return;\s*\}/.test(src) &&
+        !/pointercancel[^;\n]*starCollect|starCollect[^;\n]*pointercancel/.test(src));
+    }
+
+    // clearance from opposite-eye trails (Trail in other colour): the cut trail stays well away from a star not yet taken
+    {
+      let clear = true, nS = 0, minD = Infinity;
+      const nearPt = (pts, q) => {
+        let best = Infinity;
+        for (let k = 1; k < pts.length; k++){
+          const a = pts[k - 1], b = pts[k], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+          const u = l2 ? Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / l2)) : 0;
+          best = Math.min(best, Math.hypot(a.x + dx * u - q.x, a.y + dy * u - q.y));
+        }
+        return best;
+      };
+      SIZES.forEach(n => {
+        for (let seed = 0; seed < 40; seed++){
+          const mz = m.makeMaze(n, seed * 13 + 1), cell = m.mazeStarPlan(mz, seed * 13 + 1, null, 1), star = { cell, got:false };
+          const W = [m.mazeWalker(mz.start), m.mazeWalker(mz.goal)], rnd = m.mazeRng(seed + 7), sc = c2(n, cell);
+          for (let step = 0; step < 260 && !star.got; step++){
+            const k = rnd() < 0.5 ? 0 : 1, w = W[k], at = m.mazePoint(mz, w);
+            // a finger that tends toward the star's neighbourhood but wanders
+            const to = rnd() < 0.5 ? { x:sc.x + (rnd() - 0.5) * 2, y:sc.y + (rnd() - 0.5) * 2 } : { x:at.x + (rnd() - 0.5) * 1.6, y:at.y + (rnd() - 0.5) * 1.6 };
+            m.mazeStarSlide(mz, w, { x:at.x, y:at.y }, to, 1, null, star, rnd() < 0.3);
+            if (star.got) break;
+            const chars = W.map(q => m.mazePoint(mz, q));
+            W.forEach(q => {
+              const cut = m.mazeCutTrail(m.mazeWalkerPts(mz, q), chars, MZ2.delay);
+              if (cut.length){ nS++; const d = nearPt(cut, sc); minD = Math.min(minD, d); if (d < MZ2.starSize / 2 + 0.1 + 0.02) clear = false; }
+            });
+          }
+        }
+      });
+      t('Trail in other colour: the other-eye trail never comes near a star not yet taken (' + nS + ' states, closest ' + minD.toFixed(2) + ' cells; star radius + trail half-width is ' + (MZ2.starSize / 2 + 0.1).toFixed(2) + ')', clear && nS > 100);
+      t('the star is no wider than a character, so it clears every wall as the character does', MZ2.starSize < 0.62);
+    }
+
+    // shimmer: only on the ramp, slow and continuous
+    {
+      const PAIRS = [{ pair:'green', bluePass:0, red:'#ff0000', green:'#00ff00', redSide:'L' }, { pair:'cyan', bluePass:1, red:'#ff2ecb', green:'#2effe7', redSide:'R' }];
+      let worstRatio = 0, onRamp2 = true, ratio2 = true, nTone = 0, bounded = true, slow = true, steadyOk = true, distinct = false, period = true;
+      PAIRS.forEach((base, bi) => ['#ffffff', '#000000'].forEach(bg => ['L', 'R', 'both'].forEach(eye => {
+        m.setBg(bg); m.setState(Object.assign({}, base, { bg }));
+        let prev = null;
+        for (let ms = 0; ms <= 8000; ms += 16){
+          const tones = m.mazeStarTones(eye, ms, false), tt = m.mazeShimmerAt(ms);
+          tones.forEach((hex, j) => {
+            nTone++;
+            if (hex !== m.rampInk(eye, tt[j]) || !/^#[0-9a-f]{6}$/.test(hex)) onRamp2 = false;
+            if (tt[j] < MZ2.shimmerLo - EPS3 || tt[j] > MZ2.shimmerHi + EPS3) bounded = false;
+            if (bi === 1 && eye === base.redSide && bg === '#ffffff'){   // the eye whose ink the red filter still shows, so the ratio is finite
+              const full = m.visible('cyan', m.inkFor(eye)) / m.visible('red', m.inkFor(eye));
+              const dev = Math.abs(m.visible('cyan', hex) / m.visible('red', hex) - full);
+              worstRatio = Math.max(worstRatio, dev);
+              if (dev > 0.005) ratio2 = false;
+            }
+          });
+          if (tones[0] !== tones[1]) distinct = true;
+          if (prev && (Math.abs(tt[0] - prev[0]) > 0.02 || Math.abs(tt[1] - prev[1]) > 0.02)) slow = false;   // per 16 ms
+          prev = tt;
+        }
+        const st = m.mazeStarTones(eye, 123456, true);
+        if (st[0] !== m.rampInk(eye, MZ2.steady[0]) || st[1] !== m.rampInk(eye, MZ2.steady[1]) || m.mazeStarTones(eye, 5, true).join() !== st.join()) steadyOk = false;
+        const a = m.mazeShimmerAt(1234), b = m.mazeShimmerAt(1234 + MZ2.shimmerSecs * 1000);
+        if (Math.abs(a[0] - b[0]) > 1e-9 || Math.abs(a[1] - b[1]) > 1e-9) period = false;
+      })));
+      m.setBg('#ffffff');
+      t('every shimmer tone is rampInk of the character\'s own eye (' + nTone + ' samples, both inks, both fields, all eye plans)', onRamp2 && bounded);
+      t('shimmer tones keep the ink\'s ghost ratio (measured cyan/magenta) to within 8-bit rounding: worst deviation ' + worstRatio.toFixed(4) + ' of a ratio near 0.3', ratio2);
+      t('the shimmer is slow and continuous: under 0.02 of the ramp per frame at 60 fps, a full turn every ' + MZ2.shimmerSecs + ' s, nothing abrupt', slow && period && MZ2.shimmerSecs >= 2);
+      t('the two tone parts differ, so something visibly glides', distinct);
+      t('reduced motion gives one fixed pair of ramp tones, whatever the time', steadyOk);
+      t('the shimmer stays inside the ramp range, short of the silhouette\'s own ink and the field', MZ2.shimmerLo > 0.1 && MZ2.shimmerHi < 1 && MZ2.steady.every(v => v >= MZ2.shimmerLo && v <= MZ2.shimmerHi));
+    }
+
+    // jingle
+    {
+      const freqs = [], bass = [];
+      for (let i = 0; i < MZ2.tune.length * 2; i++){ const n = m.mazeStarNote(i); freqs.push(n.f); bass.push(n.bass); }
+      t('the jingle loops on its own tune with a bass note every fourth beat', freqs.slice(0, MZ2.tune.length).join() === freqs.slice(MZ2.tune.length).join() && bass.every((b, i) => i % 4 === 0 ? b > 0 : b === 0));
+      t('every jingle note is a sensible pitch (80 to 1400 Hz)', freqs.concat(bass.filter(b => b)).every(f => f > 80 && f < 1400));
+      // the Nintendo star theme opens on repeated notes and a half step; ours never repeats a note straight away
+      t('the tune is original: no note repeats straight after itself, so it is no repeated-note figure like the kart star\'s', MZ2.tune.every((f, i) => f !== MZ2.tune[(i + 1) % MZ2.tune.length]));
+      t('it lasts MAZE.starSecs (about 8 s) and plays about nine notes a second', MZ2.starSecs >= 6 && MZ2.starSecs <= 10 && MZ2.beat > 0.08 && MZ2.beat < 0.2);
+    }
+
+    // source rules
+    {
+      const a2 = src.indexOf('/* ---------- star power ----------'), b2 = src.indexOf('/* ---------- session log ----------');
+      const rt = src.slice(a2, b2).replace(/\/\*[\s\S]*?\*\//g, '');
+      t('the star runtime section is found', a2 > 0 && b2 > a2);
+      t('no colour literal in the star runtime', !/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(rt));
+      t('no opacity, filter, shadow, blend or mask in the star runtime', !/opacity|filter|shadow|blend|mask|backdrop/i.test(rt));
+      t('the powered tones come only from mazeStarTones, set as --sh1 / --sh2', /mazeStarTones\(mz\.eyes\.piece,/.test(rt) && (rt.match(/setProperty\(/g) || []).length === 2 && /setProperty\('--sh1', tn\[0\]\)/.test(rt) && /setProperty\('--sh2', tn\[1\]\)/.test(rt));
+      t('the power ends on time, win, a new round and page hide, and the sound setting is checked each tick',
+        /setTimeout\(\(\) => \{ starEnd\('time'\)/.test(rt) && /starEnd\('win'\)/.test(src) && /starEnd\('round'\)/.test(src) &&
+        (src.match(/starEnd\('hidden'\)/g) || []).length === 2 && /if \(!state\.sound\)\{ starSoundStop\(\); return; \}/.test(rt) && /function starSoundStart\(\)\{\s*if \(!state\.sound\) return;/.test(rt));
+      t('no audio file, no media element: the jingle is WebAudio oscillators', !/new Audio\(|<audio|\.mp3|\.wav|\.ogg|decodeAudioData/.test(src));
+      t('every oscillator the jingle starts is tracked and stopped on end', /a\.nodes\.push\(rec\)/.test(rt) && /r\.o\.stop\(now \+ 0\.04\)/.test(rt));
+      t('reduced motion is honoured: the shimmer loop is not started under it', /steady:reducedMotion\(\)/.test(rt) && /if \(!power\.steady\) starFrame\(\);/.test(rt));
+      t('the star is full ink in the characters\' eye: it takes ink.piece, the same colour as both characters',
+        /makeThing\('superstar', ink\.piece, 'mzstar',/.test(code) && /makeThing\(mz\.shapes\[k\], ink\.piece,/.test(code));
+      t('the star is a collectable on the cell centre of the route, drawn under the characters',
+        code.indexOf("makeThing('superstar'") > 0 && code.indexOf("makeThing('superstar'") < code.indexOf('makeThing(mz.shapes[k]'));
+      ['mazeStarWanted', 'mazeStarPlan', 'mazeStarTouched', 'mazeStarSlide', 'mazeShimmerAt', 'mazeStarTones', 'mazeStarNote'].forEach(name => {
+        t(name + ' touches no DOM and no state', !/\b(document|window|state|field|mz)\b/.test(braceBlock(src, 'function ' + name + '(')));
+      });
+      const css2 = [...src.matchAll(/(?:\.mzstar|\.mzchar\.powered [^{]*)\{[^}]*\}/g)].map(x => x[0]).join('\n');
+      t('the powered css touches only the tone parts\' fill, from the two script variables',
+        /\.mzchar\.powered \.t1\{fill:var\(--sh1\);\}/.test(css2) && /\.mzchar\.powered \.t2\{fill:var\(--sh2\);\}/.test(css2) &&
+        !/opacity|filter|shadow|background|border|blend|animation|transition|transform/i.test(css2));
+      t('the silhouette\'s own fill is untouched while powered (no rule on .mzchar.powered itself or its path/svg)', !/\.mzchar\.powered\s*(svg|path|\{)/.test(src.replace(/\/\*[\s\S]*?\*\//g, '')));
+      t('the multicolour burst exists only for a win under star power, from a fixed list, and only the post-win burst uses colour literals',
+        /celebrate\(\{[^}]*\}, powered\)/.test(src) && /function celebrate\(at, rainbow\)\{\s*sayParty\(\);\s*if \(rainbow\)\{ rainbowBurst\(at\); return; \}/.test(src) &&
+        (src.slice(src.indexOf('const RAINBOW'), src.indexOf('function rainbowBurst')).match(/#[0-9a-f]{6}/gi) || []).length === 6);
+      t('the burst is small and fixed (12 stars, no random numbers) and clears before the next maze',
+        !/Math\.random/.test(braceBlock(src, 'function rainbowBurst(')) && /for \(let i = 0; i < 12; i\+\+\)/.test(src) && /setTimeout\(\(\) => s\.remove\(\), 1000\)/.test(braceBlock(src, 'function rainbowBurst(')) &&
+        /setTimeout\(newRound, 1400\)/.test(src) && /querySelectorAll\('\.rb'\)\.forEach\(e => e\.remove\(\)\)/.test(src));
+      t('the Mario star shape exists in both packs\' reach (superstar is art, not pack-gated by svgFor)', /superstar: \{simple:true, pack:'kingdom'/.test(src));
+    }
+  }
 }
 
 suite('reference model', reference());
@@ -983,7 +1285,7 @@ meterRolesSuite('puzzle.html', modelFrom('puzzle.html'));
 whiteFieldSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 toneArtSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk']));
 guardSuite('puzzle.html', guardsFrom('puzzle.html'), modelFrom('puzzle.html'));
-mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide', 'mazeEyes', 'mazeAllowsWay', 'mazeMode', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeWithSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail']),
+mazeSuite('puzzle.html', modelFrom('puzzle.html', ['bestInk', 'rampEnds', 'rampInk', 'mazeInks', 'mazeRng', 'makeMaze', 'mazeSolve', 'mazeWalker', 'mazePoint', 'mazeFollow', 'mazeLeave', 'mazeGo', 'mazePursue', 'mazeDist', 'mazeGap', 'mazeJoined', 'mazeSlide', 'mazeEyes', 'mazeAllowsWay', 'mazeMode', 'mazeSegs', 'mazeSplitScore', 'mazeSplit', 'mazeWithSplit', 'mazeSplitPaths', 'mazeWalkerPts', 'mazeCutTrail', 'mazeStarWanted', 'mazeStarPlan', 'mazeStarTouched', 'mazeStarSlide', 'mazeShimmerAt', 'mazeStarTones', 'mazeStarNote']),
           guardsFrom('puzzle.html'));
 
 console.log(`\n${pass} passed, ${fail} failed`);

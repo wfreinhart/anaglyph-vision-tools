@@ -46,8 +46,10 @@ const inkOf = (cal, eye) => eye === cal.redSide ? cal.green : cal.red;
 
 async function openPage(browser, cfg, hash){
   const ctx = await browser.newContext({
-    viewport: cfg.viewport || { width:820, height:1180 }, hasTouch:true, isMobile:true, deviceScaleFactor:2
+    viewport: cfg.viewport || { width:820, height:1180 }, hasTouch:true, isMobile:true, deviceScaleFactor:2,
+    reducedMotion: cfg.reducedMotion || 'no-preference'
   });
+  if (cfg.init) await ctx.addInitScript(cfg.init);
   const game = Object.assign({ mode:'maze', eyePlan:'L', mazeN:3, mazeTrail:'line', mazeWall:'full',
                                mazeShow:false, mazeSlow:true, sound:false }, cfg.game || {});
   const calib = cfg.cal || CAL.std;
@@ -1113,6 +1115,457 @@ async function closeSheet(page){
     await pixelAudit(page, CAL.std, 'split', 'L', 'split n=' + n + ' joins and border');
     const meta = await page.evaluate(() => { const d = document.querySelector('svg.maze').dataset; return { fb:d.splitFallback, at:d.splitAttempts, tr:d.splitTries, c:d.splitCounts }; });
     t('split n=' + n + ': the split is recorded on the maze (mazes ' + meta.tr + ', splits tried ' + meta.at + ', false branches per eye ' + meta.c + ', fallback ' + meta.fb + ')', (meta.fb === '0' || meta.fb === '1') && Number(meta.tr) >= 1 && Number(meta.at) >= 1);
+    await page.ctx.close();
+  }
+
+  /* ===== power-up star (docs/maze-star.md) ===== */
+  console.log('\npower-up star');
+  const forceStar = v => ({ init:'window.mazeStarForce = ' + v + ';' });
+  /* An AudioContext stand-in that records every oscillator, so "the sound stops" can be read from the page. */
+  const AUDIO_STUB = `
+    window.mazeStarForce = 1;
+    (function(){
+      const log = window.__au = { ctx:null, oscs:[], made:0 };
+      class P { setValueAtTime(){} exponentialRampToValueAtTime(){} linearRampToValueAtTime(){} cancelScheduledValues(){} }
+      class Ctx {
+        constructor(){ this.state = 'running'; this.destination = {}; this.t0 = performance.now(); log.ctx = this; log.made++; }
+        get currentTime(){ return (performance.now() - this.t0) / 1000; }
+        resume(){ return Promise.resolve(); }
+        createGain(){ return { gain:new P(), connect(){}, disconnect(){} }; }
+        createOscillator(){
+          const o = { type:'', frequency:new P(), connect(){}, disconnect(){}, onended:null, started:false, stopAt:Infinity, startAt:0 };
+          o.start = t => { o.started = true; o.startAt = t; };
+          o.stop = t => { o.stopAt = t; };          // the last call wins, as in WebAudio
+          log.oscs.push(o);
+          return o;
+        }
+      }
+      window.AudioContext = Ctx; window.webkitAudioContext = Ctx;
+    })();`;
+  const au = page => page.evaluate(() => {
+    const l = window.__au, T = l.ctx ? l.ctx.currentTime : 0;
+    return { made:l.oscs.length, live:l.oscs.filter(o => o.started && o.startAt <= T && T < o.stopAt).length, ctx:!!l.ctx };
+  });
+  const hide = page => page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value:'hidden', configurable:true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  const starInfo = page => page.evaluate(() => {
+    const s = document.querySelector('svg.maze');
+    return s ? { cell:Number(s.dataset.star), st:s.dataset.starState, els:document.querySelectorAll('.mzstar').length,
+                 powered:document.querySelectorAll('.mzchar.powered').length } : null;
+  });
+  async function withStar(page){                 // a maze that has a star (re-deal, up to ten times, if the split could not carry one)
+    for (let i = 0; i < 10; i++){
+      const S = await starInfo(page);
+      if (S && S.cell >= 0) return S;
+      await page.keyboard.press('n'); await sleep(150);
+    }
+    return await starInfo(page);
+  }
+  async function toStar(page, release){
+    const I = await info(page), sol = solve(I), S = await starInfo(page), k = sol.indexOf(S.cell);
+    await hop(page, I, sol.slice(1, k + 1), release);
+    return { I, sol, k, S };
+  }
+  const cellBox = (I, c) => ({ x:ctr(I, c).x, y:ctr(I, c).y });
+  const starBox = page => page.evaluate(() => { const e = document.querySelector('.mzstar'); if (!e) return null; const b = e.getBoundingClientRect(); return { x:b.left + b.width / 2, y:b.top + b.height / 2, w:b.width, l:b.left, t:b.top, r:b.right, b:b.bottom }; });
+
+  /* every paint in the field, by role, on the ramp of its eye; powered tone parts report where they sit on the ramp */
+  async function auditStar(page, cal, mode, X, label, opt){
+    opt = opt || {};
+    const w = WHO(mode, X);
+    const recs = await page.evaluate(() => {
+      const out = [], geo = ['path', 'circle', 'rect', 'ellipse', 'line', 'polygon', 'polyline'];
+      document.getElementById('field').querySelectorAll('*').forEach(el => {
+        const cs = getComputedStyle(el), tag = el.tagName.toLowerCase(), cls = String(el.getAttribute('class') || '');
+        const paints = [];
+        if (el instanceof SVGElement){ if (geo.indexOf(tag) >= 0) paints.push(['fill', cs.fill], ['stroke', cs.stroke]); }
+        else paints.push(['background', cs.backgroundColor]);
+        const flags = [];
+        if (cs.opacity !== '1') flags.push('opacity');
+        if (cs.filter && cs.filter !== 'none') flags.push('filter');
+        if (cs.boxShadow && cs.boxShadow !== 'none') flags.push('shadow');
+        if (cs.mixBlendMode && cs.mixBlendMode !== 'normal') flags.push('blend');
+        out.push({ tag:tag, cls:cls, eye:el.getAttribute('data-eye'), inChar:!!el.closest('.mzchar'), inStar:!!el.closest('.mzstar'),
+                   powered:!!el.closest('.mzchar.powered'), paints:paints, flags:flags });
+      });
+      return out;
+    });
+    let n = 0, bad = [], flags = [], tones = [], bodyInk = 0, bodyBad = [], stars = 0;
+    recs.forEach(r => {
+      r.flags.forEach(f => flags.push(r.tag + '.' + r.cls + ' ' + f));
+      let role = null;
+      if (r.inStar){ role = 'piece'; }
+      else if (r.inChar) role = 'piece';
+      else if (/\bmzwall\b/.test(r.cls)) role = r.eye === 'y' ? 'wallY' : 'wall';
+      else if (/\bmztrail\b/.test(r.cls)) role = 'trail';
+      else if (/\bmzsol\b/.test(r.cls)) role = 'sol';
+      r.paints.forEach(([prop, val]) => {
+        const c = parseColor(val);
+        if (c.none) return;
+        n++;
+        if (!role){ bad.push(r.tag + '.' + r.cls + ' ' + prop + ' has a paint and no role'); return; }
+        const eye = w[role];
+        if (!eye){ bad.push(role + ' present in ' + mode); return; }
+        const o = c.bad ? { ok:false, why:c.bad } : onRamp(c, inkOf(cal, eye));
+        if (!o.ok) bad.push(role + ' (' + r.tag + '.' + r.cls + ' ' + prop + ' ' + val + ') not on ' + eye + ' ramp ' + o.why);
+        if (r.inStar && r.tag !== 'svg' && o.ok && prop === 'fill' && !/\bd\b/.test(r.cls)){ stars++; if (o.k < 0.99) bodyBad.push('star body k=' + o.k.toFixed(3)); }
+        if (r.powered && prop === 'fill' && o.ok){
+          if (/\bt[12]\b/.test(r.cls)) tones.push(o.k);
+          else if (!/\bd\b/.test(r.cls) && r.tag !== 'svg'){ bodyInk++; if (o.k < 0.99) bodyBad.push('powered silhouette k=' + o.k.toFixed(3)); }
+        }
+      });
+    });
+    t(label + ': ' + n + ' paints, each on the ramp of the eye the table gives it', bad.length === 0 && n > 0, bad.slice(0, 3).join(' | '));
+    t(label + ': no opacity, filter, shadow or blend on any field element', flags.length === 0, flags.slice(0, 2).join(' | '));
+    if (opt.powered){
+      t(label + ': the powered character\'s silhouette is full ink; it has tone parts that sit on the ramp', bodyBad.length === 0 && bodyInk > 0 && tones.length > 0, bodyBad.slice(0, 2).join(' | ') + ' tones=' + tones.length);
+    }
+    if (opt.star) t(label + ': the star is painted, full ink', stars > 0 && bodyBad.length === 0, bodyBad.slice(0, 2).join(' | '));
+    return { tones:tones };
+  }
+
+  /* ---- placement, colour and the Mario-pack rule ---- */
+  console.log('  placement and colour');
+  for (const mode of MODES){
+    const page = await openPage(browser, Object.assign({ game:{ packs:['kingdom'], eyePlan:'L', mazeN:4 } }, forceStar(1)));
+    if (mode !== 'one') await setColours(page, mode);
+    const S = await withStar(page);
+    t(mode + ': a star is placed (Mushroom Kingdom pack, forced)', S && S.cell >= 0 && S.els === 1 && S.st === 'waiting', JSON.stringify(S));
+    const I = await info(page), sol = solve(I), k = sol.indexOf(S.cell);
+    t(mode + ': it sits on an interior cell of the solution route', k >= 1 && k <= sol.length - 2, 'index ' + k + ' of ' + sol.length);
+    const B = await starBox(page), c = ctr(I, S.cell);
+    t(mode + ': it is centred on that cell and well inside it, clear of the walls', B && Math.abs(B.x - c.x) < 1.5 && Math.abs(B.y - c.y) < 1.5 && B.w <= I.cs * 0.55 && B.w < I.cs - 2 * I.ww - 2, JSON.stringify(B) + ' cs ' + I.cs);
+    await auditStar(page, CAL.std, mode, 'L', mode + ' with the star waiting', { star:true });
+    // same ink as the characters, for the eye the table gives the characters
+    const inks = await page.evaluate(() => ({ star:getComputedStyle(document.querySelector('.mzstar')).color, ch:[...document.querySelectorAll('.mzchar')].map(e => getComputedStyle(e).color) }));
+    t(mode + ': the star\'s colour is the characters\' colour', inks.ch.every(x => x === inks.star), JSON.stringify(inks));
+    t(mode + ': no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+  {
+    const base = { eyePlan:'L', mazeN:4 };
+    const classic = await openPage(browser, Object.assign({ game:Object.assign({ packs:['classic'] }, base) }, forceStar(1)));
+    t('no Mario pack: no star, even when forced', (await starInfo(classic)).els === 0 && (await starInfo(classic)).cell === -1);
+    await classic.ctx.close();
+    const items = await openPage(browser, Object.assign({ game:Object.assign({ packs:['kingdomitems'] }, base) }, forceStar(1)));
+    t('the Mario Items pack alone gets a star', (await starInfo(items)).els === 1);
+    await items.ctx.close();
+    const off = await openPage(browser, Object.assign({ game:Object.assign({ packs:['kingdom'] }, base) }, forceStar(0)));
+    t('forced off: no star in a Mario maze', (await starInfo(off)).els === 0);
+    await off.ctx.close();
+    const mixed = await openPage(browser, Object.assign({ game:Object.assign({ packs:['classic', 'kingdom'] }, base) }, forceStar(1)));
+    t('Mario among other packs: a star', (await starInfo(mixed)).els === 1);
+    await mixed.ctx.close();
+    // unforced: about one in three, over many deals
+    const free = await openPage(browser, { game:Object.assign({ packs:['kingdom'] }, base) });
+    let withS = 0; const deals = 60;
+    for (let i = 0; i < deals; i++){
+      if ((await starInfo(free)).els === 1) withS++;
+      await free.keyboard.press('n'); await sleep(30);
+    }
+    t('unforced, about one maze in three has a star (' + withS + ' of ' + deals + ')', withS >= 8 && withS <= 36);
+    await free.ctx.close();
+  }
+
+  /* ---- collection ---- */
+  console.log('  collection');
+  {
+    const open = () => openPage(browser, Object.assign({ game:{ packs:['kingdom'], eyePlan:'L', mazeN:4 } }, forceStar(1)));
+    // walking onto it
+    let page = await open();
+    let S = await withStar(page);
+    let { I, sol, k } = await toStar(page, true);
+    let S2 = await starInfo(page);
+    t('walking onto the star takes it: the star is gone, power is on, one character is powered', S2.st === 'power' && S2.els === 0 && S2.powered === 1, JSON.stringify(S2));
+    // running back and forth over where it was does nothing more
+    I = await info(page);
+    await down(page, ctr(I, sol[k])); await move(page, ctr(I, sol[k - 1])); await move(page, ctr(I, sol[k])); await up(page, ctr(I, sol[k]));
+    S2 = await starInfo(page);
+    t('back and forth over the spot: still exactly one power, no second star', S2.st === 'power' && S2.els === 0 && S2.powered === 1);
+    await page.ctx.close();
+
+    // a fast swipe: finger samples 1.4 cells apart along the route
+    page = await open(); S = await withStar(page);
+    I = await info(page); sol = solve(I); k = sol.indexOf(S.cell);
+    const pts = [];
+    for (let i = 1; i <= k; i++){
+      const a = ctr(I, sol[i - 1]), b = ctr(I, sol[i]);
+      pts.push(b);
+    }
+    // route polyline resampled every 1.4 cells
+    const poly = []; for (let i = 0; i <= k; i++) poly.push(ctr(I, sol[i]));
+    const fast = []; { let acc = 0, want = 1.4 * I.cs;
+      for (let i = 1; i < poly.length; i++){
+        const L = Math.hypot(poly[i].x - poly[i - 1].x, poly[i].y - poly[i - 1].y);
+        while (acc + L >= want){ const f = (want - acc) / L; fast.push({ x:poly[i - 1].x + (poly[i].x - poly[i - 1].x) * f, y:poly[i - 1].y + (poly[i].y - poly[i - 1].y) * f }); want += 1.4 * I.cs; }
+        acc += L; }
+      fast.push(poly[poly.length - 1]); }
+    await down(page, ctr(I, sol[0]));
+    for (const q of fast) await move(page, q);
+    await up(page, poly[poly.length - 1]);
+    S2 = await starInfo(page);
+    t('a fast swipe along the route (' + fast.length + ' samples, 1.4 cells apart) takes it', S2.st === 'power' && S2.els === 0, JSON.stringify(S2));
+    await page.ctx.close();
+
+    // release onto it counts
+    page = await open(); S = await withStar(page);
+    I = await info(page); sol = solve(I); k = sol.indexOf(S.cell);
+    await down(page, ctr(I, sol[0]));
+    for (let i = 1; i < k; i++) await move(page, ctr(I, sol[i]));
+    t('one cell short of it: not taken', (await starInfo(page)).st === 'waiting');
+    await up(page, ctr(I, sol[k]));
+    S2 = await starInfo(page);
+    t('lifting the finger onto it takes it (pointerup counts)', S2.st === 'power' && S2.els === 0, JSON.stringify(S2));
+    await page.ctx.close();
+
+    // cancel never takes it
+    page = await open(); S = await withStar(page);
+    I = await info(page); sol = solve(I); k = sol.indexOf(S.cell);
+    await down(page, ctr(I, sol[0]));
+    for (let i = 1; i < k; i++) await move(page, ctr(I, sol[i]));
+    await fire(page, 'pointercancel', ctr(I, sol[k]));
+    await sleep(80);
+    S2 = await starInfo(page);
+    t('a pointercancel at the star does not take it, and the star stays', S2.st === 'waiting' && S2.els === 1, JSON.stringify(S2));
+    I = await info(page);
+    await hop(page, I, [sol[k]]);
+    S2 = await starInfo(page);
+    t('after the cancel it can still be taken, once', S2.st === 'power' && S2.els === 0, JSON.stringify(S2));
+    await page.ctx.close();
+
+    // never through a wall: a finger dragged straight across a wall at it
+    page = await openPage(browser, Object.assign({ game:{ packs:['kingdom'], eyePlan:'L', mazeN:6 } }, forceStar(1)));
+    let done = false, tries = 0, pushed = 0, leaked = 0;
+    while (!done && tries++ < 12){
+      S = await withStar(page); I = await info(page); sol = solve(I); k = sol.indexOf(S.cell);
+      // a route cell j well before the star that touches the star's cell across a wall
+      let j = -1;
+      for (let i = 1; i < k - 1; i++){
+        const dx = Math.abs(sol[i] % I.n - S.cell % I.n), dy = Math.abs(Math.floor(sol[i] / I.n) - Math.floor(S.cell / I.n));
+        if (dx + dy === 1){ j = i; break; }
+      }
+      if (j < 0){ await page.keyboard.press('n'); await sleep(150); continue; }
+      await down(page, ctr(I, sol[0]));
+      for (let i = 1; i <= j; i++) await move(page, ctr(I, sol[i]));
+      const a = ctr(I, sol[j]), b = ctr(I, S.cell);
+      for (let q = 1; q <= 8; q++) await move(page, { x:a.x + (b.x - a.x) * q / 8, y:a.y + (b.y - a.y) * q / 8 });
+      await move(page, { x:b.x + (b.x - a.x) * 0.5, y:b.y + (b.y - a.y) * 0.5 });
+      pushed++;
+      if ((await starInfo(page)).st !== 'waiting') leaked++;
+      await up(page, b);
+      if ((await starInfo(page)).st !== 'waiting') leaked++;
+      done = true;
+    }
+    t('a finger dragged straight through a wall at the star does not take it (' + pushed + ' wall push)', pushed === 1 && leaked === 0);
+    t('no page errors in collection', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+
+  /* ---- the rendered audit during star power, in every mode ---- */
+  console.log('  star power: rendered audit');
+  for (const mode of MODES){
+    const page = await openPage(browser, Object.assign({ game:{ packs:['kingdom'], eyePlan:'L', mazeN:3 } }, forceStar(1)));
+    if (mode !== 'one') await setColours(page, mode);
+    await withStar(page);
+    const { I, sol, k } = await toStar(page, true);
+    t(mode + ': star power is on', (await starInfo(page)).st === 'power');
+    const ks = [];
+    for (let i = 0; i < 7; i++){
+      const r = await auditStar(page, CAL.std, mode, 'L', mode + ' power sample ' + (i + 1), { powered:true });
+      ks.push(r.tones);
+      await sleep(380);
+    }
+    // a character has one or two tone parts (.t1 / .t2, in document order); every one of them must glide
+    const parts = ks[0].length, cols = [];
+    for (let j = 0; j < parts; j++) cols.push(ks.map(a => a[j]));
+    const span = a => Math.max(...a) - Math.min(...a);
+    t(mode + ': the powered character has tone parts, the same number at every sample (' + parts + ')', parts >= 1 && ks.every(a => a.length === parts));
+    t(mode + ': each tone part glides along the ramp (moves ' + cols.map(c => span(c).toFixed(2)).join(' and ') + ' of the ramp over 2.7 s)', cols.every(c => span(c) > 0.08));
+    let jump = 0; cols.forEach(c => { for (let i = 1; i < c.length; i++) jump = Math.max(jump, Math.abs(c[i] - c[i - 1])); });
+    t(mode + ': and slowly (no step over 0.25 of the ramp between samples 0.4 s apart: ' + jump.toFixed(2) + ')', jump < 0.25);
+    const all = [].concat(...cols);
+    t(mode + ': every tone is inside the ramp range 0.2 to 0.9', all.every(v => v > 0.2 && v < 0.9), all.map(v => v.toFixed(2)).join(' '));
+    t(mode + ': the powered silhouette stays full ink, the other character is untouched',
+      await page.evaluate(() => { const ch = [...document.querySelectorAll('.mzchar')]; return ch.filter(e => e.classList.contains('powered')).length === 1 &&
+        ch.filter(e => !e.classList.contains('powered')).every(e => !e.style.getPropertyValue('--sh1')); }));
+    t(mode + ': no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+  }
+  {
+    // the other eye, and a measured pair: tones on that eye's ramp
+    for (const [cal, X, name] of [[CAL.meas, 'R', 'measured pair, right eye']]){
+      const page = await openPage(browser, Object.assign({ cal:cal, game:{ packs:['kingdom'], eyePlan:X, mazeN:3 } }, forceStar(1)));
+      await withStar(page); await toStar(page, true);
+      await auditStar(page, cal, 'one', X, name + ' power', { powered:true });
+      await page.ctx.close();
+    }
+  }
+
+  /* ---- reduced motion: a steady powered look ---- */
+  console.log('  star power: reduced motion');
+  {
+    const page = await openPage(browser, Object.assign({ reducedMotion:'reduce', game:{ packs:['kingdom'], eyePlan:'L', mazeN:3 } }, forceStar(1)));
+    await withStar(page); await toStar(page, true);
+    const ks = [];
+    for (let i = 0; i < 4; i++){ ks.push((await auditStar(page, CAL.std, 'one', 'L', 'reduced motion sample ' + (i + 1), { powered:true })).tones); await sleep(450); }
+    const same = ks.every(a => a.length === ks[0].length && a.every((v, j) => Math.abs(v - ks[0][j]) < 0.005));
+    t('reduced motion: the tone parts never change while powered (' + ks[0].map(v => v.toFixed(2)).join(' ') + ')', same);
+    t('reduced motion: but the powered look is there (tones are not the ordinary 0.3 / 0.6 shades)', (await starInfo(page)).powered === 1 && ks[0].some(v => Math.abs(v - 0.3) > 0.03 && Math.abs(v - 0.6) > 0.03));
+    await page.ctx.close();
+  }
+
+  /* ---- sound ---- */
+  console.log('  star power: sound');
+  {
+    const open = (game) => openPage(browser, { init:AUDIO_STUB, game:Object.assign({ packs:['kingdom'], eyePlan:'L', mazeN:3, sound:true }, game || {}) });
+    // sound off: silence
+    let page = await open({ sound:false });
+    await withStar(page); await toStar(page, true); await sleep(900);
+    let A = await au(page);
+    t('the sound setting off: star power makes no sound at all', A.made === 0, JSON.stringify(A));
+    t('and the shimmer still runs without sound', (await starInfo(page)).powered === 1);
+    await page.ctx.close();
+
+    // sound on: it plays, keeps playing, and a hide stops it
+    page = await open();
+    await withStar(page);
+    t('before the star is taken: nothing plays', (await au(page)).made === 0);
+    await toStar(page, true); await sleep(900);
+    A = await au(page);
+    t('taking the star starts the jingle (' + A.made + ' notes scheduled, ' + A.live + ' sounding)', A.made > 4 && A.live > 0);
+    await sleep(1200);
+    const A2 = await au(page);
+    t('it keeps going (more notes scheduled a second later: ' + A.made + ' to ' + A2.made + ')', A2.made > A.made + 4);
+    await hide(page); await sleep(250);
+    const A3 = await au(page); await sleep(900); const A4 = await au(page);
+    t('the page hiding silences it at once (' + A3.live + ' notes sounding)', A3.live === 0);
+    t('and nothing new is scheduled afterwards', A4.made === A3.made && A4.live === 0, A3.made + ' then ' + A4.made);
+    t('star power is over after the hide, with the shimmer gone', (await starInfo(page)).powered === 0);
+    await page.ctx.close();
+
+    // pagehide
+    page = await open(); await withStar(page); await toStar(page, true); await sleep(600);
+    await page.evaluate(() => window.dispatchEvent(new Event('pagehide'))); await sleep(250);
+    A = await au(page);
+    t('pagehide silences it too', A.live === 0 && (await starInfo(page)).powered === 0, JSON.stringify(A));
+    await page.ctx.close();
+
+    // a mode change (colours chooser) mid-power
+    page = await open(); await withStar(page); await toStar(page, true); await sleep(600);
+    t('(power is on before the colour change)', (await au(page)).live > 0);
+    await setColours(page, 'trail'); await sleep(300);
+    A = await au(page);
+    t('changing the colour mode stops the sound and the power', A.live === 0 && (await starInfo(page)).powered === 0, JSON.stringify(A));
+    await page.ctx.close();
+
+    // leaving Maze
+    page = await open(); await withStar(page); await toStar(page, true); await sleep(600);
+    await openSheet(page);
+    await page.locator('#modeChips [data-mode="jigsaw"]').tap(); await closeSheet(page); await sleep(300);
+    A = await au(page);
+    t('leaving Maze stops the sound', A.live === 0, JSON.stringify(A));
+    await page.ctx.close();
+
+    // the sound switch turned off mid-power
+    page = await open(); await withStar(page); await toStar(page, true); await sleep(600);
+    await openSheet(page); await page.locator('#sound').tap(); await sleep(450);
+    A = await au(page);
+    const mid = A.made; await sleep(700);
+    t('switching the sound off in Settings stops the jingle (' + A.live + ' sounding, no new notes)', A.live === 0 && (await au(page)).made === mid, JSON.stringify(A));
+    await page.ctx.close();
+
+    // ends on its own at about eight seconds
+    page = await open(); await withStar(page); await toStar(page, true);
+    const t0 = Date.now();
+    await sleep(6500);
+    t('still powered at 6.5 s', (await starInfo(page)).powered === 1 && (await au(page)).live > 0);
+    await sleep(2400);
+    A = await au(page);
+    t('star power ends by itself at about 8 s, with the sound and the shimmer (' + ((Date.now() - t0) / 1000).toFixed(1) + ' s in)', A.live === 0 && (await starInfo(page)).powered === 0 && (await starInfo(page)).st === 'spent', JSON.stringify(A));
+    t('the tone parts return to the ordinary shades after power', await page.evaluate(() => [...document.querySelectorAll('.mzchar')].every(e => !e.classList.contains('powered') && !e.style.getPropertyValue('--sh1'))));
+    await page.ctx.close();
+  }
+
+  /* ---- a win while powered: the small multicolour burst, then gone before the next maze ---- */
+  console.log('  star power: the win');
+  {
+    const page = await openPage(browser, { init:AUDIO_STUB, game:{ packs:['kingdom'], eyePlan:'alt', mazeN:3, sound:true } });
+    await withStar(page);
+    let { I, sol, k } = await toStar(page, true);
+    t('before the win: no reward on screen, not even a coloured one', await page.locator('#burst span').count() === 0);
+    await sleep(400);
+    I = await info(page);
+    await down(page, ctr(I, sol[k]));
+    for (let i = k + 1; i < sol.length; i++){ await move(page, ctr(I, sol[i])); if (await page.locator('#burst span').count()) break; }
+    await sleep(80);
+    const B = await page.evaluate(() => [...document.querySelectorAll('#burst span')].map(s => { const r = s.getBoundingClientRect(); return { c:getComputedStyle(s).color, w:s.style.getPropertyValue('--d'), cls:s.className }; }));
+    t('winning under star power fires the multicolour burst (' + B.length + ' stars, ' + new Set(B.map(b => b.c)).size + ' colours)', B.length === 12 && new Set(B.map(b => b.c)).size >= 5);
+    t('it is small: twelve 30px stars, not a full-screen sheet', B.every(b => b.w === '30px') && await page.evaluate(() => { const b = document.getElementById('burst'); return getComputedStyle(b).backgroundColor === 'rgba(0, 0, 0, 0)' && b.children.length === 12; }));
+    await up(page, ctr(I, I.goal));
+    await sleep(120);
+    t('winning ends star power: the shimmer is gone and the jingle stops (it is replaced by the reward chime)', (await starInfo(page)).powered === 0);
+    await sleep(1000);
+    t('the burst has cleared by the time the next maze is dealt (1.1 s)', await page.locator('#burst span').count() === 0);
+    await sleep(500);
+    const next = await info(page), N = await starInfo(page);
+    t('then a fresh maze appears, trail reset, and nothing is powered', next.trail.length === 1 && N.powered === 0 && (await page.locator('#burst span').count()) === 0);
+    t('no page errors', page.errors.length === 0, page.errors.join(' | '));
+    await page.ctx.close();
+
+    // a win without star power is the ordinary single-ink reward (the multicolour burst is not for ordinary wins)
+    const p2 = await openPage(browser, Object.assign({ game:{ packs:['kingdom'], eyePlan:'L', mazeN:3 } }, forceStar(0)));
+    const J = await info(p2), s2 = solve(J);
+    await hop(p2, J, s2.slice(1, s2.length - 1));
+    const J2 = await info(p2);
+    await down(p2, ctr(J2, s2[s2.length - 2])); await move(p2, ctr(J2, s2[s2.length - 1])); await sleep(60);
+    const cols = await p2.evaluate(() => [...document.querySelectorAll('#burst span')].map(s => getComputedStyle(s).color));
+    t('an ordinary win keeps the old burst: 16 pieces, binocular ink only', cols.length === 16 && cols.every(c => c === 'rgb(0, 0, 0)'));
+    await p2.ctx.close();
+  }
+
+  /* Trail in other colour: the other-eye trail never comes near a star not yet taken */
+  console.log('  star and the other-eye trail');
+  {
+    const page = await openPage(browser, Object.assign({ game:{ packs:['kingdom'], eyePlan:'L', mazeN:6 } }, forceStar(1)));
+    await setColours(page, 'trail');
+    let I, sol, S, k;
+    for (let tries = 0; tries < 20; tries++){       // a star far enough along the route for the trail to grow past a few cells first
+      await withStar(page);
+      I = await info(page); sol = solve(I); S = await starInfo(page); k = sol.indexOf(S.cell);
+      if (S.cell >= 0 && k >= 6) break;
+      await page.keyboard.press('n'); await sleep(150);
+    }
+    let minD = Infinity, samples = 0;
+    await down(page, ctr(I, sol[0]));
+    for (let i = 1; i < k; i++){
+      const a = ctr(I, sol[i - 1]), b = ctr(I, sol[i]);
+      for (let q = 1; q <= 4; q++){
+        await move(page, { x:a.x + (b.x - a.x) * q / 4, y:a.y + (b.y - a.y) * q / 4 });
+        // the distance, in cells, from the star's centre to the painted trail lines themselves (not their bounding boxes)
+        const d = await page.evaluate(() => {
+          const star = document.querySelector('.mzstar'), svg = document.querySelector('svg.maze'); if (!star) return null;
+          const cs = Number(svg.dataset.cs), n = Number(svg.dataset.n), c = Number(svg.dataset.star);
+          const sx = (c % n + 0.5) * cs, sy = (Math.floor(c / n) + 0.5) * cs;
+          let best = Infinity;
+          document.querySelectorAll('.mztrail').forEach(p => {
+            const pts = [...(p.getAttribute('d') || '').matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map(q => [Number(q[1]), Number(q[2])]);
+            for (let i = 1; i < pts.length; i++){
+              const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+              const u = l2 ? Math.max(0, Math.min(1, ((sx - x1) * dx + (sy - y1) * dy) / l2)) : 0;
+              best = Math.min(best, Math.hypot(x1 + dx * u - sx, y1 + dy * u - sy) / cs);
+            }
+          });
+          return best;
+        });
+        if (d === null) continue;
+        samples++;
+        minD = Math.min(minD, d);
+      }
+    }
+    t('the other-eye trail never comes near the star (' + samples + ' samples, closest ' + (minD === Infinity ? 'n/a' : minD.toFixed(2)) + ' cells; star radius + trail half-width is 0.35)', samples > 10 && minD > 0.35 + 0.02);
+    await up(page, ctr(I, sol[k - 1]));
     await page.ctx.close();
   }
 

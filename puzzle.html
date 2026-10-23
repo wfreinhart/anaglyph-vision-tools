@@ -81,6 +81,12 @@
      rect, a mask or a frame: the only paint in a maze is the round's eye. */
   svg.maze{position:absolute; display:block; fill:none; stroke:none; touch-action:none; cursor:grab;}
   .mzpiece{pointer-events:none;}
+  .mzstar{pointer-events:none;}
+  /* Star power: only the powered character's tone parts change, to the two
+     ramp colours script sets (see starApply). Written without a leading
+     "svg " so it is not one of the .t1/.t2 tone rules the optics test reads. */
+  .mzchar.powered .t1{fill:var(--sh1);}
+  .mzchar.powered .t2{fill:var(--sh2);}
   /* Held pieces move by transform only — never left/top, and never under a
      filter. See the drag note in the script. The lift is the scale in the
      transform itself, so nothing paints outside the border box. */
@@ -1338,6 +1344,8 @@
   function newRound(){
     stopHoleAnim();
     stopPop();
+    starEnd('round');
+    $('burst').querySelectorAll('.rb').forEach(e => e.remove());
     /* A rebuild under a held piece removes it, and the finger's release
        then lands on the new board where nothing listens for it. Left set,
        `drag` made onGrab refuse every later grab until a reload — every
@@ -2270,7 +2278,24 @@
      splitScale)), at least 1. joinGap: the gap left where one
      eye's wall meets the other's, as a multiple of the wall width. */
   const MAZE = { meet:0.5, step:0.5, sub:0.25, grab:0.8, hold:0.12, ahead:0.2,
-                 delay:1, splitAttempts:60, mazeAttempts:20, splitMin:1, splitScale:0.5, joinGap:0.6 };
+                 delay:1, splitAttempts:60, mazeAttempts:20, splitMin:1, splitScale:0.5, joinGap:0.6,
+                 /* Power-up star (docs/maze-star.md). starChance: how often a maze
+                    gets one (about one in three). starReach: how close along the
+                    rails a character must be to take it, in cells; under step
+                    plus the star's width, so no slide can skip over it.
+                    starSecs: star power lasts this long. starSize: the star's
+                    width in cells. shimmerSecs, shimmerLo, shimmerHi: the
+                    powered character's tone parts glide along the ramp
+                    between these two positions, once round every shimmerSecs
+                    (a slow glide, nowhere near flicker). steady: where the
+                    two tone parts rest under reduced motion. beat and tune: the
+                    jingle's seconds per note and its note frequencies (Hz),
+                    a bouncing pentatonic run of our own. */
+                 starChance:1 / 3, starReach:0.3, starSecs:8, starSize:0.5,
+                 shimmerSecs:4, shimmerLo:0.25, shimmerHi:0.85, steady:[0.8, 0.35],
+                 beat:0.11,
+                 tune:[523.25, 659.25, 783.99, 659.25, 880, 783.99, 659.25, 587.33,
+                       523.25, 783.99, 1046.5, 783.99, 880, 659.25, 587.33, 392] };
   function mazeRng(seed){
     let a = seed >>> 0;
     return function(){
@@ -2556,8 +2581,9 @@
      from which E can still reach a later route cell (the goal included)
      without passing back through u. That is a usable alternative route in
      E's view, not a dead end. Returns [cells with a false branch for X
-     alone, for Y alone]. */
-  function mazeSplitScore(maze, segs, assign){
+     alone, for Y alone]. `star` (optional, a route cell) is the power-up star:
+     it is X ink, so it only changes X's count (see `lim`). */
+  function mazeSplitScore(maze, segs, assign, star){
     const n = maze.n, N = n * n, D = [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]];
     const route = mazeSolve(maze), at = new Array(N).fill(-1);
     route.forEach((i, k) => { at[i] = k; });
@@ -2575,14 +2601,20 @@
         });
         return list;
       };
-      /* From v, with u shut off, is a route cell later than u reachable? */
+      /* From v, with u shut off, is a route cell later than u reachable?
+         With a star on the route (X sees it, so X knows that cell is on the
+         route), a branch before the star only counts if it comes back no
+         later than the star without going past it: one that skips the star is
+         already ruled out. */
+      const lim = eye === 0 && star >= 0 ? at[star] : Infinity;
       const rejoins = (v, u) => {
-        const seen = new Array(N).fill(false), stack = [v];
+        const seen = new Array(N).fill(false), stack = [v], top = at[u] < lim ? lim : Infinity;
+        if (at[v] > top) return false;
         seen[v] = seen[u] = true;
         while (stack.length){
           const x = stack.pop();
-          if (at[x] > at[u]) return true;
-          ways(x, u).forEach(y => { if (!seen[y]){ seen[y] = true; stack.push(y); } });
+          if (at[x] > at[u] && at[x] <= top) return true;
+          ways(x, u).forEach(y => { if (!seen[y] && at[y] <= top){ seen[y] = true; stack.push(y); } });
         }
         return false;
       };
@@ -2707,6 +2739,74 @@
     return out.length > 1 ? out : [];
   }
 
+  /* ---- power-up star (docs/maze-star.md) ----
+     Cosmetic, same eye as the characters, and only with a Mario pack. The
+     pure parts below touch neither the DOM nor `state`. */
+
+  /* A Mario pack is on. */
+  function mazeStarWanted(packs){
+    return Array.isArray(packs) && (packs.indexOf('kingdom') >= 0 || packs.indexOf('kingdomitems') >= 0);
+  }
+
+  /* Which cell, if any, this maze's star sits on: about one maze in
+     `chance` (default MAZE.starChance), on an interior cell of the solution
+     route (never an end, where a character starts). Decided from the seed
+     alone. In split walls (`split` given) the star is X ink, so X learns that
+     one cell is on the route; it is only placed where X still sees at least
+     `need` false branches with that cell known (mazeSplitScore's `star`), and
+     never in a split that already failed. Returns the cell, or -1. */
+  function mazeStarPlan(maze, seed, split, chance){
+    const rnd = mazeRng((seed ^ 0x57A2C0DE) >>> 0), roll = rnd(), pick = rnd();
+    if (!(roll < (chance === undefined ? MAZE.starChance : chance))) return -1;
+    let cells = mazeSolve(maze).slice(1, -1);
+    if (split){
+      if (split.fallback) return -1;
+      cells = cells.filter(c => mazeSplitScore(maze, split.segs, split.assign, c)[0] >= split.need);
+    }
+    return cells.length ? cells[Math.min(cells.length - 1, Math.floor(pick * cells.length))] : -1;
+  }
+
+  /* Is the walker's tip within MAZE.starReach of the cell's centre, measured
+     ALONG THE CORRIDORS (never straight through a wall)? */
+  function mazeStarTouched(maze, w, cell){
+    return mazeGap(maze, w, mazeWalker(cell)) <= MAZE.starReach + 1e-9;
+  }
+
+  /* mazeSlide that also looks at every sample for the star, so a fast flick
+     or a release that carries the character over it still takes it.
+     star is { cell, got }; got is set the first time and never undone, so it
+     is taken exactly once. The result's `got` is true only on the slide that
+     took it. */
+  function mazeStarSlide(maze, w, from, to, cs, other, star, settle){
+    let took = false;
+    const r = mazeSlide(maze, w, from, to, cs, other, star ? ww => {
+      if (!star.got && mazeStarTouched(maze, ww, star.cell)){ star.got = true; took = true; }
+    } : null, settle);
+    return { moved:r.moved, joined:r.joined, got:took };
+  }
+
+  /* Where the powered character's two tone parts sit on the ramp (0 = the
+     field, 1 = full ink) ms after power began: slow sines, half a turn
+     apart, between shimmerLo and shimmerHi. */
+  function mazeShimmerAt(ms){
+    const mid = (MAZE.shimmerLo + MAZE.shimmerHi) / 2, amp = (MAZE.shimmerHi - MAZE.shimmerLo) / 2;
+    const ph = ms / (MAZE.shimmerSecs * 1000) * Math.PI * 2;
+    return [mid + amp * Math.sin(ph), mid + amp * Math.sin(ph + Math.PI)];
+  }
+
+  /* The two tone colours, always rampInk of the character's own eye. */
+  function mazeStarTones(eye, ms, steady){
+    const t = steady ? MAZE.steady : mazeShimmerAt(ms);
+    return [rampInk(eye, t[0]), rampInk(eye, t[1])];
+  }
+
+  /* Jingle note i, looping: the melody frequency, and a bass note on every
+     fourth beat (two octaves down), or 0. */
+  function mazeStarNote(i){
+    const k = ((i % MAZE.tune.length) + MAZE.tune.length) % MAZE.tune.length;
+    return { f:MAZE.tune[k], bass: i % 4 === 0 ? MAZE.tune[k] / 4 : 0 };
+  }
+
   let mz = null;
   const SVGNS = 'http://www.w3.org/2000/svg';
 
@@ -2724,7 +2824,14 @@
     /* Character 0 starts at maze.start, character 1 at maze.goal; each
        walker (and its trail) begins at its own corner. */
     mz = { maze:maze, walkers:[mazeWalker(maze.start), mazeWalker(maze.goal)], shapes:art, done:false,
-           solution:mazeSolve(maze), svg:null, cs:0, pad:0, ox:0, oy:0, seed:made.seed, split:made.split, colours:'one' };
+           solution:mazeSolve(maze), svg:null, cs:0, pad:0, ox:0, oy:0, seed:made.seed, split:made.split, colours:'one',
+           star:null, starEl:null };
+    /* window.mazeStarForce (tests only): 1 always places a star, 0 never;
+       unset leaves it to chance. The Mario-pack rule holds either way. */
+    const force = window.mazeStarForce;
+    const cell = mazeStarWanted(state.packs)
+      ? mazeStarPlan(maze, made.seed, made.split, force === 1 ? 1 : force === 0 ? 0 : MAZE.starChance) : -1;
+    if (cell >= 0) mz.star = { cell:cell, got:false };
     mazeDraw(true);
   }
 
@@ -2734,6 +2841,7 @@
     field.innerHTML = '';
     const m = mz.maze, n = m.n, eye = state.curEye, colours = mazeEyes(eye, mazeMode()).mode, ink = mazeInks(eye, colours);
     mz.colours = colours;
+    mz.eyes = mazeEyes(eye, colours);
     const w = field.clientWidth, h = field.clientHeight, pad = 14;
     const top = HUD_CLEARANCE, bottom = h - bottomClear();
     const cs = Math.max(8, Math.floor(Math.min(w - 2 * pad, bottom - top) / n)), side = cs * n;
@@ -2806,6 +2914,14 @@
        wall's painted edge (the walls have a minimum width at small cells). */
     const ps = Math.max(6, Math.min(Math.round(cs * 0.62), Math.floor(cs * 0.8 - ww)));
     mz.ps = ps;
+    /* The star goes under the characters. Same ink as they have; it sits at
+       the centre of a corridor cell, as clear of every wall as a character is. */
+    mz.starEl = null;
+    if (mz.star && !mz.star.got){
+      const ss = Math.max(6, Math.round(cs * MAZE.starSize)), c = mz.star.cell;
+      mz.starEl = makeThing('superstar', ink.piece, 'mzstar',
+                            { x: mz.ox + (c % n + 0.5) * cs, y: mz.oy + (Math.floor(c / n) + 0.5) * cs }, ss);
+    }
     mz.els = [0, 1].map(k => makeThing(mz.shapes[k], ink.piece, 'mzpiece mzchar', mazeAt(k), ps));
     svg.dataset.n = String(n);
     svg.dataset.cs = String(cs);
@@ -2821,6 +2937,7 @@
     }
     svg.addEventListener('pointerdown', onMazeDown);
     mazeSync();
+    starApply();
   }
 
   /* Where character k is, in field pixels. */
@@ -2857,6 +2974,8 @@
     mz.svg.dataset.trailB = mz.walkers[1].trail.join(',');
     mz.svg.dataset.posA = pos(mz.walkers[0]);
     mz.svg.dataset.posB = pos(mz.walkers[1]);
+    mz.svg.dataset.star = mz.star ? String(mz.star.cell) : '-1';
+    mz.svg.dataset.starState = !mz.star ? 'none' : (mz.star.got ? (power ? 'power' : 'spent') : 'waiting');
   }
 
   function mazeLocal(e){
@@ -2890,8 +3009,9 @@
   function mazeMove(e){
     const q = mazeLocal(e), p = { x:q.x + drag.off.x, y:q.y + drag.off.y };
     const k = drag.which, mine = mz.walkers[k], other = mz.walkers[1 - k];
-    const r = mazeSlide(mz.maze, mine, drag.last, p, mz.cs, other, null, e.type === 'pointerup');
+    const r = mazeStarSlide(mz.maze, mine, drag.last, p, mz.cs, other, mz.star, e.type === 'pointerup');
     drag.last = p;
+    if (r.got) starCollect(k);
     if (r.moved) mazeSync();
     if (r.joined || mazeJoined(mz.maze, mine, other)) mazeWin();
   }
@@ -2909,13 +3029,16 @@
   function mazeWin(){
     mz.done = true;
     if (drag) mazeRelease();
+    const powered = !!power;
+    starEnd('win');
+    mazeSync();
     /* The tally ticks so the pips fill, but a maze is not an answer: the
        stats line counts it apart from the right/wrong of a target. */
     state.hits += 1; state.mazeWins += 1;
     sayYes(); buzz(12);
     paintHud();
     const a = mazeAt(0), b = mazeAt(1);
-    celebrate({ x:(a.x + b.x) / 2, y:(a.y + b.y) / 2 });
+    celebrate({ x:(a.x + b.x) / 2, y:(a.y + b.y) / 2 }, powered);
     setTimeout(newRound, 1400);
   }
 
@@ -3136,8 +3259,32 @@
     if (navigator.vibrate) navigator.vibrate(ms);
   }
 
-  function celebrate(at){
+  /* The multicolour burst of a win under star power: the one place colours
+     other than the eyes' inks are used, and only after success, away from any
+     target. Fixed (same stars, same spread every time), small, and cleared
+     before the next maze appears (newRound also sweeps it). */
+  const RAINBOW = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#bf5af2'];
+  function rainbowBurst(at){
+    const layer = $('burst');
+    for (let i = 0; i < 12; i++){
+      const s = document.createElement('span'), ang = (i / 12) * Math.PI * 2;
+      s.className = 'rb';
+      s.style.setProperty('--d', '30px');
+      s.style.setProperty('--tx', Math.cos(ang) * 150 + 'px');
+      s.style.setProperty('--ty', Math.sin(ang) * 150 + 'px');
+      s.style.setProperty('--rot', '180deg');
+      s.style.left = at.x + 'px';
+      s.style.top  = at.y + 'px';
+      s.style.color = RAINBOW[i % RAINBOW.length];
+      s.innerHTML = svgFor('superstar');
+      layer.appendChild(s);
+      setTimeout(() => s.remove(), 1000);
+    }
+  }
+
+  function celebrate(at, rainbow){
     sayParty();
+    if (rainbow){ rainbowBurst(at); return; }
     const layer = $('burst'), pool = shapePool(), ink = inkFor('both');
     for (let i = 0; i < 16; i++){
       const s = document.createElement('span');
@@ -3155,6 +3302,102 @@
       layer.appendChild(s);
       setTimeout(() => s.remove(), 1000);
     }
+  }
+
+  /* ---------- star power ----------
+     The runtime for the maze's power-up star (the pure parts are in the maze
+     section above; docs/maze-star.md).
+     One power at a time. While it lasts the powered character's .t1/.t2
+     parts take --sh1/--sh2, which this sets to rampInk of the character's own
+     eye and glides slowly (mazeShimmerAt); the silhouette stays full ink and
+     nothing else changes. Under reduced motion the two tones just rest at
+     MAZE.steady. The jingle is scheduled a few notes ahead and every
+     oscillator is tracked, so ending the power (time, win, a new round, the
+     page hiding, the sound setting going off) silences it at once. */
+  let power = null, starAud = null;
+  const reducedMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  function starCollect(k){
+    if (mz.starEl){ mz.starEl.remove(); mz.starEl = null; }
+    starEnd('again');
+    power = { k:k, t0:performance.now(), steady:reducedMotion(), raf:0,
+              timer:setTimeout(() => { starEnd('time'); if (mz && mz.svg) mazeSync(); }, MAZE.starSecs * 1000) };
+    starApply();
+    if (!power.steady) starFrame();
+    starSoundStart();
+  }
+
+  /* Puts the current tones on the powered character (also after a redraw). */
+  function starApply(){
+    if (!power || !mz || !mz.els) return;
+    const el = mz.els[power.k], tn = mazeStarTones(mz.eyes.piece, performance.now() - power.t0, power.steady);
+    el.classList.add('powered');
+    el.style.setProperty('--sh1', tn[0]);
+    el.style.setProperty('--sh2', tn[1]);
+  }
+  function starFrame(){
+    if (!power) return;
+    starApply();
+    power.raf = requestAnimationFrame(starFrame);
+  }
+
+  /* Ends star power: for any reason, and harmlessly when there is none. */
+  function starEnd(why){
+    const had = power;
+    power = null;
+    if (had){
+      clearTimeout(had.timer);
+      if (had.raf) cancelAnimationFrame(had.raf);
+      if (mz && mz.els && mz.els[had.k]){
+        const el = mz.els[had.k];
+        el.classList.remove('powered');
+        el.style.removeProperty('--sh1');
+        el.style.removeProperty('--sh2');
+      }
+    }
+    starSoundStop();
+    return had ? why : null;
+  }
+
+  function starSoundStart(){
+    if (!state.sound) return;
+    const c = audio(); if (!c) return;
+    starAud = { c:c, i:0, at:c.currentTime + 0.04, nodes:[], timer:setInterval(starSched, 100) };
+    starSched();
+  }
+  function starOsc(a, type, f, at, len, peak){
+    const o = a.c.createOscillator(), g = a.c.createGain(), rec = { o:o, g:g };
+    o.type = type;
+    o.frequency.setValueAtTime(f, at);
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(peak, at + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+    o.connect(g); g.connect(a.c.destination);
+    o.onended = () => { const j = a.nodes.indexOf(rec); if (j >= 0) a.nodes.splice(j, 1); };
+    a.nodes.push(rec);
+    o.start(at); o.stop(at + len + 0.02);
+  }
+  function starSched(){
+    const a = starAud;
+    if (!a) return;
+    if (!state.sound){ starSoundStop(); return; }
+    while (a.at < a.c.currentTime + 0.35){
+      const n = mazeStarNote(a.i);
+      starOsc(a, 'triangle', n.f, a.at, MAZE.beat * 0.9, 0.09);
+      if (n.bass) starOsc(a, 'sine', n.bass, a.at, MAZE.beat * 3.6, 0.1);
+      a.at += MAZE.beat; a.i += 1;
+    }
+  }
+  function starSoundStop(){
+    const a = starAud;
+    if (!a) return;
+    starAud = null;
+    clearInterval(a.timer);
+    const now = a.c.currentTime;
+    a.nodes.splice(0).forEach(r => {
+      try{ r.g.gain.cancelScheduledValues(now); r.g.gain.linearRampToValueAtTime(0.0001, now + 0.03); }catch(_){}
+      try{ r.o.stop(now + 0.04); }catch(_){}
+    });
   }
 
   /* ---------- session log ----------
@@ -3855,9 +4098,9 @@
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') keepAwake();
-    else abortDrag('hidden');
+    else { abortDrag('hidden'); starEnd('hidden'); }
   });
-  window.addEventListener('pagehide', () => abortDrag('hidden'));
+  window.addEventListener('pagehide', () => { abortDrag('hidden'); starEnd('hidden'); });
 
   /* Demo links: puzzle.html#maze opens Maze. puzzle.html#pop starts Pop! with all four character packs on (Ice Age, Mario, Mickey, Young Jedi)
      unless packs were already chosen in Settings.
